@@ -104,11 +104,11 @@ def encode(fname: str,
                 corpus[-1] = []
             end = False
         elif special_tok[1] in token:
-            if len(corpus[-1]) <= length_threshold:
-                corpus.pop()
-            end = True
+            if len(corpus[-1]) > length_threshold:
+                end = True
         elif token in special_tok[-2:]:
-            labels.append(token)
+            if end:
+                labels.append(token)
         else:
             token = vocab.get(token, None) or vocab['<unk>']
             corpus[-1].append(token)
@@ -171,7 +171,7 @@ def main():
     # read tokens, init sequences, dataset, and loader
     vocab, train_corpus, train_labels = encode('./mix.train.txt', 3, seq_len)
     _, valid_corpus, valid_labels = encode('./mix.valid.txt', -1, seq_len, vocab=vocab)
-    # _, test_corpus, test_labels = encode('./mix.test.txt', -1, seq_len, vocab=vocab)
+    _, test_corpus, test_labels = encode('./mix.test.txt', -1, seq_len, vocab=vocab)
 
     train_dataset = BioLMDataset(train_corpus, seq_len)
     train_loader = DataLoader(train_dataset,
