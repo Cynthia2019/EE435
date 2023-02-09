@@ -35,6 +35,7 @@ class FFNN(nn.Module):
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         self.linear1 = nn.Linear(seq_len, embedding_dim)
         self.linear2 = nn.Linear(embedding_dim, num_embeddings, bias=False)
+        self.embedding.weight = self.linear2.weight
 
     def forward(self, x: torch.Tensor):
         x = self.embedding(x)
