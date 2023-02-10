@@ -16,6 +16,14 @@ class Token:
         self.idx = idx
         self.count = count
 
+    def __eq__(self, other):
+        if isinstance(other, Token):
+            return self.tok == other.tok
+        elif isinstance(other, str):
+            return self.tok == other
+        else:
+            return False
+
     def __int__(self):
         return self.idx
 
@@ -84,8 +92,7 @@ def encode(fname: str,
     if vocab is None:
         counts = Counter(tokens)
         counts = {k: v for k, v in counts.items() if v > count_threshold}
-        for tok in special_tok:
-            counts.pop(tok, None)
+        counts.pop(special_tok[0], None)
         vocab = {k: Token(k, i, v)
                  for i, (k, v) in enumerate(counts.items())}
 
@@ -93,7 +100,6 @@ def encode(fname: str,
         vocab[unk_tok.tok] = unk_tok
 
     corpus = []
-    labels = []
     end = True
 
     for token in tokens:
@@ -103,17 +109,14 @@ def encode(fname: str,
             else:
                 corpus[-1] = []
             end = False
+            continue
         elif special_tok[1] in token:
             if len(corpus[-1]) > length_threshold:
                 end = True
-        elif token in special_tok[-2:]:
-            if end:
-                labels.append(token)
-        else:
-            token = vocab.get(token, None) or vocab['<unk>']
-            corpus[-1].append(token)
+        token = vocab.get(token, None) or vocab['<unk>']
+        corpus[-1].append(token)
 
-    return vocab, corpus, labels
+    return vocab, corpus
 
 
 def train_categorical(model: nn.Module,
@@ -169,9 +172,13 @@ def main():
         print('WARNING: cuda not detected', file=sys.stderr)
 
     # read tokens, init sequences, dataset, and loader
-    vocab, train_corpus, train_labels = encode('./mix.train.txt', 3, seq_len)
-    _, valid_corpus, valid_labels = encode('./mix.valid.txt', -1, seq_len, vocab=vocab)
-    _, test_corpus, test_labels = encode('./mix.test.txt', -1, seq_len, vocab=vocab)
+    vocab, train_corpus = encode('./mix.train.txt', 3, seq_len)
+    _, valid_corpus = encode('./mix.valid.txt', -1, seq_len, vocab=vocab)
+    _, test_corpus = encode('./mix.test.txt', -1, seq_len, vocab=vocab)
+    for corpus in [train_corpus, valid_corpus, test_corpus]:
+        for seq in corpus:
+            assert seq[-1].tok in ['[REAL]', '[FAKE]']
+            assert seq[-2].tok == '<end_bio>'
 
     train_dataset = BioLMDataset(train_corpus, seq_len)
     train_loader = DataLoader(train_dataset,
