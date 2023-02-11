@@ -16,14 +16,6 @@ class Token:
         self.idx = idx
         self.count = count
 
-    def __eq__(self, other):
-        if isinstance(other, Token):
-            return self.tok == other.tok
-        elif isinstance(other, str):
-            return self.tok == other
-        else:
-            return False
-
     def __int__(self):
         return self.idx
 
@@ -81,27 +73,27 @@ class BioLMDataset(Dataset):
         return self.total_length
 
 
-def encode(fname: str,
+def encode(fnames: list,
            count_threshold: int,
            length_threshold: int,
            vocab: dict = None):
     special_tok = ['<start_bio>', '<end_bio>', '[FAKE]', '[REAL]']
-    with open(fname, 'rt') as f:
-        tokens = f.read().strip().split()
+    tokens = []
 
-    if vocab is None:
-        counts = Counter(tokens)
-        counts = {k: v for k, v in counts.items() if v > count_threshold}
-        counts.pop(special_tok[0], None)
-        vocab = {k: Token(k, i, v)
-                 for i, (k, v) in enumerate(counts.items())}
-
-        unk_tok = Token('<unk>', len(vocab), 100)
-        vocab[unk_tok.tok] = unk_tok
+    # read all files as tokens
+    for fname in fnames:
+        with open(fname, 'rt', encoding='utf8') as f:
+            content = f.read()
+            if 'fake' in fname:
+                content.replace(special_tok[1], f' {special_tok[1]} {special_tok[2]} ')
+            elif 'real' in fname:
+                content.replace(special_tok[1], f' {special_tok[1]} {special_tok[3]} ')
+            tokens += content.strip().split()
 
     corpus = []
     end = True
 
+    # split to list of sequences, each sequence is a single bio as tokens
     for token in tokens:
         if special_tok[0] in token:
             if end:
@@ -113,8 +105,29 @@ def encode(fname: str,
         elif special_tok[1] in token:
             if len(corpus[-1]) > length_threshold:
                 end = True
-        token = vocab.get(token, None) or vocab['<unk>']
         corpus[-1].append(token)
+
+    # deduplicate
+    corpus = list(set(tuple(seq) for seq in corpus))
+
+    # count and create vocab
+    if vocab is None:
+        flat_corpus = [token for seq in corpus for token in seq]
+        counts = Counter(flat_corpus)
+        counts = {k: v for k, v in counts.items() if v > count_threshold}
+        vocab = {k: Token(k, i, v)
+                 for i, (k, v) in enumerate(counts.items())}
+
+        unk_tok = Token('<unk>', len(vocab), 100)
+        vocab[unk_tok.tok] = unk_tok
+
+    # convert tokens to Token object
+    for i, seq in enumerate(corpus):
+        temp = []
+        for token in seq:
+            token = vocab.get(token, None) or vocab['<unk>']
+            temp.append(token)
+        corpus[i] = temp
 
     return vocab, corpus
 
@@ -132,6 +145,7 @@ def train_categorical(model: nn.Module,
     for epoch in range(1, epochs + 1):
         total_loss = torch.tensor(0., device=device)
         t = time.time()
+        model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
             total_step += 1
@@ -147,6 +161,7 @@ def train_categorical(model: nn.Module,
             with torch.inference_mode():
                 total_loss += loss.detach()
         with torch.inference_mode():
+            model.eval()
             total_loss = float(total_loss.cpu())
             total_loss /= len(train_loader)
 
@@ -172,13 +187,13 @@ def main():
         print('WARNING: cuda not detected', file=sys.stderr)
 
     # read tokens, init sequences, dataset, and loader
-    vocab, train_corpus = encode('./mix.train.txt', 3, seq_len)
-    _, valid_corpus = encode('./mix.valid.txt', -1, seq_len, vocab=vocab)
-    _, test_corpus = encode('./mix.test.txt', -1, seq_len, vocab=vocab)
+    vocab, train_corpus = encode(['./mix.train.txt'], 3, seq_len)
+    _, valid_corpus = encode(['./mix.valid.txt'], -1, seq_len, vocab=vocab)
+    _, test_corpus = encode(['./mix.test.txt'], -1, seq_len, vocab=vocab)
     for corpus in [train_corpus, valid_corpus, test_corpus]:
         for seq in corpus:
-            assert seq[-1].tok in ['[REAL]', '[FAKE]']
-            assert seq[-2].tok == '<end_bio>'
+            assert seq[-1].tok in ['[REAL]', '[FAKE]'], seq[-10:]
+            assert seq[-2].tok == '<end_bio>', seq[-10:]
 
     train_dataset = BioLMDataset(train_corpus, seq_len)
     train_loader = DataLoader(train_dataset,
