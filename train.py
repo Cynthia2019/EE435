@@ -84,10 +84,12 @@ def encode(fnames: list,
     for fname in fnames:
         with open(fname, 'rt', encoding='utf8') as f:
             content = f.read()
+            content = content.replace('< start_bio >', special_tok[0])
+            content = content.replace('< end_bio >', special_tok[1])
             if 'fake' in fname:
-                content.replace(special_tok[1], f' {special_tok[1]} {special_tok[2]} ')
+                content = content.replace(special_tok[1], f' {special_tok[1]} {special_tok[2]} ')
             elif 'real' in fname:
-                content.replace(special_tok[1], f' {special_tok[1]} {special_tok[3]} ')
+                content = content.replace(special_tok[1], f' {special_tok[1]} {special_tok[3]} ')
             tokens += content.strip().split()
 
     corpus = []
@@ -187,13 +189,14 @@ def main():
         print('WARNING: cuda not detected', file=sys.stderr)
 
     # read tokens, init sequences, dataset, and loader
-    vocab, train_corpus = encode(['./mix.train.txt'], 3, seq_len)
-    _, valid_corpus = encode(['./mix.valid.txt'], -1, seq_len, vocab=vocab)
-    _, test_corpus = encode(['./mix.test.txt'], -1, seq_len, vocab=vocab)
-    for corpus in [train_corpus, valid_corpus, test_corpus]:
+    vocab, train_corpus = encode(['./mix.train.tok', 'fake.train.tok', 'real.train.tok'], 3, seq_len)
+    _, valid_corpus = encode(['./mix.valid.tok', 'fake.valid.tok', 'real.valid.tok'], -1, seq_len, vocab=vocab)
+    _, test_corpus = encode(['./mix.test.tok', 'fake.test.tok', 'real.test.tok'], -1, seq_len, vocab=vocab)
+    for i, corpus in enumerate([train_corpus, valid_corpus, test_corpus]):
         for seq in corpus:
-            assert seq[-1].tok in ['[REAL]', '[FAKE]'], seq[-10:]
-            assert seq[-2].tok == '<end_bio>', seq[-10:]
+            assert seq[-1].tok in ['[REAL]', '[FAKE]'], f'{i}: {seq[-20:]}'
+            assert seq[-2].tok == '<end_bio>', f'{i}: {seq[-20:]}'
+            assert seq[0].tok != '<start_bio>', f'{i}: {seq[-20:]}'
 
     train_dataset = BioLMDataset(train_corpus, seq_len)
     train_loader = DataLoader(train_dataset,
