@@ -233,6 +233,36 @@ def train_categorical(model: nn.Module,
     }
     return results
 
+def test_categorical(model, test_corpus, seq_len, vocab, device):
+    model.eval()
+    test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
+    # confusion matrix for binary classification
+    # TP: true positive (label REAL is predicted correctly)
+    TP, FP, FN, TN = 0, 0, 0, 0
+    for data in test_data:
+        x = torch.tensor(data[-seq_len-1:-1], device=device)
+        y = torch.tensor(data[-1], device=device)
+        logits = model(x)
+        if logits[vocab['[FAKE]'].idx] > logits[vocab['[REAL]'].idx]:
+            pred = vocab['[FAKE]'].idx
+        else:
+            pred = vocab['[REAL]'].idx
+        if pred == y:
+            if pred == vocab['[REAL]'].idx:
+                TP += 1
+            else:
+                TN += 1
+        else:
+            if pred == vocab['[REAL]'].idx:
+                FP += 1
+            else:
+                FN += 1
+    accuracy = (TP + TN) / (TP + FP + FN + TN)
+    results = {
+        'accuracy': accuracy,
+        'confusion_matrix': [TP, FP, FN, TN],
+    }
+    return results
 
 def main():
     # TODO: argparse
@@ -306,7 +336,11 @@ def main():
                                 valid_loader=valid_loader,
                                 epochs=epochs,
                                 device=device)
-
+    test_results = test_categorical(model=model,
+                                    test_corpus=test_corpus,                    
+                                    seq_len=seq_len,
+                                    vocab=vocab,
+                                    device=device)
 
 if __name__ == '__main__':
     main()
