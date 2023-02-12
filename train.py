@@ -242,7 +242,8 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     for data in test_data:
         x = torch.tensor(data[-seq_len-1:-1], device=device)
         y = torch.tensor(data[-1], device=device)
-        logits = model(x)
+        logits = model(x.unsqueeze(0))
+        logits.squeeze_(0)
         if logits[vocab['[FAKE]'].idx] > logits[vocab['[REAL]'].idx]:
             pred = vocab['[FAKE]'].idx
         else:
