@@ -144,8 +144,10 @@ def train_categorical(model: nn.Module,
     criterion = nn.CrossEntropyLoss().to(device)
     print('training started')
     total_step = 0
+    train_perplexity_per_epoch = []
+    valid_perplexity_per_epoch = []
     for epoch in range(1, epochs + 1):
-        total_loss = torch.tensor(0., device=device)
+        train_loss = torch.tensor(0., device=device)
         t = time.time()
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
@@ -158,20 +160,34 @@ def train_categorical(model: nn.Module,
             loss.backward()
             optim.step()
 
-            # TODO: accuracy calculation
-
             with torch.inference_mode():
-                total_loss += loss.detach()
+                train_loss += loss.detach()
         with torch.inference_mode():
             model.eval()
-            total_loss = float(total_loss.cpu())
-            total_loss /= len(train_loader)
 
-            # TODO: validation
+            # calcualte perplexity for train and valid set
+            train_loss = float(train_loss.cpu())
+            train_loss /= len(train_loader)
+            train_perplexity = np.exp(train_loss)
+            train_perplexity_per_epoch.append(train_perplexity)
+
+            valid_loss = torch.tensor(0., device=device)
+            for x, y in valid_loader:
+                x, y = x.to(device), y.to(device)
+                pred = model(x)
+                loss = criterion(pred, y)
+                valid_loss += loss.item()
+            valid_loss /= len(valid_loader)
+            valid_perplexity = np.exp(valid_loss)
+            valid_perplexity_per_epoch.append(valid_perplexity)
 
             print(f'epoch {epoch}:',
-                  f'loss {total_loss},',
+                  f'loss {train_loss},',
+                  f'valid_loss {valid_loss},',
+                  f'train_perplexity {train_perplexity},',
+                  f'valid_perplexity {valid_perplexity},',
                   f'time {time.time() - t}')
+    return model, train_perplexity_per_epoch, valid_perplexity_per_epoch
 
 
 def main():
@@ -224,7 +240,7 @@ def main():
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # start training for categorical prediction
-    train_categorical(model, optim, train_loader, valid_loader, epochs, device)
+    model, train_perplexity, valid_perplexity = train_categorical(model, optim, train_loader, valid_loader, epochs, device)
 
 
 if __name__ == '__main__':
