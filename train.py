@@ -2,6 +2,7 @@ import sys
 import time
 import tqdm
 import torch
+import argparse
 import numpy as np
 from torch import nn
 from typing import Callable
@@ -233,6 +234,7 @@ def train_categorical(model: nn.Module,
     }
     return results
 
+
 def test_categorical(model, test_corpus, seq_len, vocab, device):
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
@@ -265,13 +267,22 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     }
     return results
 
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    # todo: add more arguments
+    parser.add_argument('-model', type=str, default='FFNN')
+    return parser.parse_args()
+
+
 def main():
-    # TODO: argparse
+    params = parse_arguments()
+
     seq_len = 5
     embedding_dim = 32
     batch_size = 32
     epochs = 50
-    model_type = 'FFNN'
+    model_type = params.model
 
     # device detection
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
