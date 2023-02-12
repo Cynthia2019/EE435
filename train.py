@@ -4,8 +4,10 @@ import tqdm
 import torch
 import numpy as np
 from torch import nn
+from typing import Callable
 from collections import Counter
-from torch.utils.data import Dataset, DataLoader
+from itertools import zip_longest
+from torch.utils.data import Dataset, DataLoader, default_collate
 
 
 class Token:
@@ -26,27 +28,41 @@ class Token:
         return f"Token('{self.tok}', {self.idx}, {self.count})"
 
 
-class FFNN(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int):
+class SequenceModel(nn.Module):
+    def __init__(self, num_embeddings: int, embedding_dim: int):
         super().__init__()
+        self.in_embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.out_embedding = nn.Linear(embedding_dim, num_embeddings, bias=False)
+        self.in_embedding.weight = self.out_embedding.weight
+
+    def init_params(self):
+        def initialize(m: nn.Module):
+            if type(m) in [nn.Embedding, nn.Linear, nn.LSTM, nn.LSTMCell]:
+                nn.init.xavier_normal_(m.weight)
+                if getattr(m, 'bias', None) is not None:
+                    nn.init.zeros_(m.bias)
+
+        self.apply(initialize)
+
+
+class FFNN(SequenceModel):
+    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int):
+        super().__init__(num_embeddings, embedding_dim)
 
         seq_len *= embedding_dim
-
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         self.linear1 = nn.Linear(seq_len, embedding_dim)
-        self.linear2 = nn.Linear(embedding_dim, num_embeddings, bias=False)
-        self.embedding.weight = self.linear2.weight
+        self.init_params()
 
     def forward(self, x: torch.Tensor):
-        x = self.embedding(x)
+        x = self.in_embedding(x)
         x = torch.flatten(x, 1)
         x = self.linear1(x)
         x = torch.tanh(x)
-        x = self.linear2(x)
+        x = self.out_embedding(x)
         return x
 
 
-class BioLMDataset(Dataset):
+class BioFixedLenDataset(Dataset):
     def __init__(self, corpus: list, seq_len: int):
         self.seq_len = seq_len
 
@@ -71,6 +87,30 @@ class BioLMDataset(Dataset):
 
     def __len__(self):
         return self.total_length
+
+
+class BioVariableLenDataset(Dataset):
+    def __init__(self, corpus):
+        self.corpus = [np.array(bio, dtype=np.int64) for bio in corpus]
+
+        for bio in self.corpus:
+            assert len(bio) > 1
+
+    def __getitem__(self, item):
+        return self.corpus[item]
+
+    def __len__(self):
+        return len(self.corpus)
+
+    @staticmethod
+    def collate(batch: list):
+        batch = sorted(batch, key=len, reverse=True)
+        retval = []
+        for timestep in zip_longest(*batch):
+            timestep = np.array([idx for idx in timestep if idx is not None],
+                                dtype=np.int64)
+            retval.append(torch.from_numpy(timestep))
+        return retval[:-1], retval[1:]
 
 
 def encode(fnames: list,
@@ -136,12 +176,12 @@ def encode(fnames: list,
 
 def train_categorical(model: nn.Module,
                       optim: torch.optim.Optimizer,
+                      criterion: Callable,
                       train_loader: DataLoader,
                       valid_loader: DataLoader,
                       epochs: int,
                       device: str):
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss().to(device)
     print('training started')
     total_step = 0
     train_perplexity_per_epoch = []
@@ -187,7 +227,11 @@ def train_categorical(model: nn.Module,
                   f'train_perplexity {train_perplexity},',
                   f'valid_perplexity {valid_perplexity},',
                   f'time {time.time() - t}')
-    return model, train_perplexity_per_epoch, valid_perplexity_per_epoch
+    results = {
+        'train_perplexity': train_perplexity_per_epoch,
+        'valid_perplexity': valid_perplexity_per_epoch,
+    }
+    return results
 
 
 def main():
@@ -205,42 +249,63 @@ def main():
         print('WARNING: cuda not detected', file=sys.stderr)
 
     # read tokens, init sequences, dataset, and loader
-    vocab, train_corpus = encode(['./mix.train.tok', 'fake.train.tok', 'real.train.tok'], 3, seq_len)
-    _, valid_corpus = encode(['./mix.valid.tok', 'fake.valid.tok', 'real.valid.tok'], -1, seq_len, vocab=vocab)
-    _, test_corpus = encode(['./mix.test.tok', 'fake.test.tok', 'real.test.tok'], -1, seq_len, vocab=vocab)
+    vocab, train_corpus = encode(['./mix.train.tok', 'fake.train.tok', 'real.train.tok'],
+                                 count_threshold=3,
+                                 length_threshold=seq_len)
+    _, valid_corpus = encode(['./mix.valid.tok', 'fake.valid.tok', 'real.valid.tok'],
+                             count_threshold=-1,
+                             length_threshold=seq_len,
+                             vocab=vocab)
+    _, test_corpus = encode(['./mix.test.tok', 'fake.test.tok', 'real.test.tok'],
+                            count_threshold=-1,
+                            length_threshold=seq_len,
+                            vocab=vocab)
+
     for i, corpus in enumerate([train_corpus, valid_corpus, test_corpus]):
         for seq in corpus:
             assert seq[-1].tok in ['[REAL]', '[FAKE]'], f'{i}: {seq[-20:]}'
             assert seq[-2].tok == '<end_bio>', f'{i}: {seq[-20:]}'
             assert seq[0].tok != '<start_bio>', f'{i}: {seq[-20:]}'
 
-    train_dataset = BioLMDataset(train_corpus, seq_len)
-    train_loader = DataLoader(train_dataset,
-                              batch_size=batch_size,
-                              shuffle=True,
-                              num_workers=4,
-                              pin_memory=True)
-    print('training dataset loaded with length', len(train_dataset))
-
-    valid_dataset = BioLMDataset(valid_corpus, seq_len)
-    valid_loader = DataLoader(valid_dataset,
-                              batch_size=batch_size,
-                              shuffle=False,
-                              num_workers=2,
-                              pin_memory=True)
-    print('validation dataset loaded with length', len(valid_dataset))
-
-    # instantiate model and optimizer
+    # instantiate model and model specific parameters
     if model_type == 'FFNN':
         model = FFNN(num_embeddings=len(vocab),
                      embedding_dim=embedding_dim,
                      seq_len=seq_len)
+        criterion = nn.CrossEntropyLoss().to(device)
+        collate_fn = default_collate
+        dataset_cls = BioFixedLenDataset
     else:
         raise NotImplementedError
+
+    train_dataset = dataset_cls(train_corpus, seq_len)
+    train_loader = DataLoader(train_dataset,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              collate_fn=collate_fn,
+                              num_workers=4,
+                              pin_memory=True)
+    print('training dataset loaded with length', len(train_dataset))
+
+    valid_dataset = dataset_cls(valid_corpus, seq_len)
+    valid_loader = DataLoader(valid_dataset,
+                              batch_size=batch_size,
+                              shuffle=False,
+                              collate_fn=collate_fn,
+                              num_workers=2,
+                              pin_memory=True)
+    print('validation dataset loaded with length', len(valid_dataset))
+
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # start training for categorical prediction
-    model, train_perplexity, valid_perplexity = train_categorical(model, optim, train_loader, valid_loader, epochs, device)
+    results = train_categorical(model=model,
+                                optim=optim,
+                                criterion=criterion,
+                                train_loader=train_loader,
+                                valid_loader=valid_loader,
+                                epochs=epochs,
+                                device=device)
 
 
 if __name__ == '__main__':
