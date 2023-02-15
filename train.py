@@ -39,10 +39,8 @@ class SequenceModel(nn.Module):
 
     def init_params(self):
         def initialize(m: nn.Module):
-            if type(m) in [nn.Embedding, nn.Linear]:
+            if isinstance(m, nn.Embedding):
                 nn.init.xavier_normal_(m.weight)
-                if getattr(m, 'bias', None) is not None:
-                    nn.init.zeros_(m.bias)
             elif type(m) in [nn.LSTM, nn.LSTMCell]:
                 for name, param in m.named_parameters():
                     if 'weight' in name:
@@ -61,7 +59,7 @@ class FFNN(SequenceModel):
         self.linear1 = nn.Linear(seq_len, embedding_dim)
 
         self.init_params()
-        self.in_embedding.weight = self.out_embedding.weight
+        self.out_embedding.weight = self.in_embedding.weight
 
     def forward(self, x: torch.Tensor):
         x = self.in_embedding(x)
@@ -78,10 +76,17 @@ class LSTM(SequenceModel):
         self.lstm = nn.LSTM(embedding_dim, embedding_dim, num_layers, batch_first=True)
 
         self.init_params()
+        assert self.out_embedding.weight.shape == self.in_embedding.weight[:-1].shape
         self.out_embedding.weight = nn.Parameter(self.in_embedding.weight[:-1])
+        nn.init.zeros_(self.in_embedding.weight[-1])  # pad index
 
     def forward(self, x):
-        raise NotImplementedError
+        x, lengths = x
+        x = self.in_embedding(x)
+        x = nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
+        x, _ = self.lstm(x)
+        x = self.out_embedding(x.data)
+        return x
 
 
 class BioFixedLenDataset(Dataset):
@@ -130,13 +135,14 @@ class BioVariableLenDataset(Dataset):
 
     def collate(self, batch: list):
         batch = sorted(batch, key=len, reverse=True)
+        lengths = [len(sample) for sample in batch]
         x = np.full((len(batch), len(batch[0])),
                     fill_value=self.pad_val, dtype=np.int64)
         y = deepcopy(x)
         for i, row in enumerate(batch):
             x[i, :len(row) - 1] = row[:-1]
             y[i, :len(row) - 1] = row[1:]
-        return torch.as_tensor(x), torch.as_tensor(y)
+        return (torch.as_tensor(x), lengths), torch.as_tensor(y)
 
 
 def encode(fnames: list,
