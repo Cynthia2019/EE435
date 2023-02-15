@@ -30,18 +30,25 @@ class Token:
 
 
 class SequenceModel(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int):
+    def __init__(self, num_embeddings: int, embedding_dim: int, pad: bool = False):
         super().__init__()
-        self.in_embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.in_embedding = nn.Embedding(num_embeddings + int(pad),
+                                         embedding_dim,
+                                         padding_idx=num_embeddings if pad else None)
         self.out_embedding = nn.Linear(embedding_dim, num_embeddings, bias=False)
-        self.in_embedding.weight = self.out_embedding.weight
 
     def init_params(self):
         def initialize(m: nn.Module):
-            if type(m) in [nn.Embedding, nn.Linear, nn.LSTM, nn.LSTMCell]:
+            if type(m) in [nn.Embedding, nn.Linear]:
                 nn.init.xavier_normal_(m.weight)
                 if getattr(m, 'bias', None) is not None:
                     nn.init.zeros_(m.bias)
+            elif type(m) in [nn.LSTM, nn.LSTMCell]:
+                for name, param in m.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_normal_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
 
         self.apply(initialize)
 
@@ -52,7 +59,9 @@ class FFNN(SequenceModel):
 
         seq_len *= embedding_dim
         self.linear1 = nn.Linear(seq_len, embedding_dim)
+
         self.init_params()
+        self.in_embedding.weight = self.out_embedding.weight
 
     def forward(self, x: torch.Tensor):
         x = self.in_embedding(x)
@@ -61,6 +70,18 @@ class FFNN(SequenceModel):
         x = torch.tanh(x)
         x = self.out_embedding(x)
         return x
+
+
+class LSTM(SequenceModel):
+    def __init__(self, num_embeddings: int, embedding_dim: int, num_layers: int):
+        super().__init__(num_embeddings, embedding_dim, pad=True)
+        self.lstm = nn.LSTM(embedding_dim, embedding_dim, num_layers, batch_first=True)
+
+        self.init_params()
+        self.out_embedding.weight = nn.Parameter(self.in_embedding.weight[:-1])
+
+    def forward(self, x):
+        raise NotImplementedError
 
 
 class BioFixedLenDataset(Dataset):
@@ -242,7 +263,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     # TP: true positive (label REAL is predicted correctly)
     TP, FP, FN, TN = 0, 0, 0, 0
     for data in test_data:
-        x = torch.tensor(data[-seq_len-1:-1], device=device)
+        x = torch.tensor(data[-seq_len - 1:-1], device=device)
         y = torch.tensor(data[-1], device=device)
         logits = model(x.unsqueeze(0))
         logits.squeeze_(0)
@@ -349,10 +370,11 @@ def main():
                                 epochs=epochs,
                                 device=device)
     test_results = test_categorical(model=model,
-                                    test_corpus=test_corpus,                    
+                                    test_corpus=test_corpus,
                                     seq_len=seq_len,
                                     vocab=vocab,
                                     device=device)
+
 
 if __name__ == '__main__':
     main()
