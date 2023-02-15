@@ -5,9 +5,9 @@ import torch
 import argparse
 import numpy as np
 from torch import nn
+from copy import deepcopy
 from typing import Callable
 from collections import Counter
-from itertools import zip_longest
 from torch.utils.data import Dataset, DataLoader, default_collate
 
 
@@ -110,10 +110,14 @@ class BioFixedLenDataset(Dataset):
     def __len__(self):
         return self.total_length
 
+    def collate(self, batch):
+        return default_collate(batch)
+
 
 class BioVariableLenDataset(Dataset):
-    def __init__(self, corpus):
+    def __init__(self, corpus, pad_val: int):
         self.corpus = [np.array(bio, dtype=np.int64) for bio in corpus]
+        self.pad_val = pad_val
 
         for bio in self.corpus:
             assert len(bio) > 1
@@ -124,15 +128,15 @@ class BioVariableLenDataset(Dataset):
     def __len__(self):
         return len(self.corpus)
 
-    @staticmethod
-    def collate(batch: list):
+    def collate(self, batch: list):
         batch = sorted(batch, key=len, reverse=True)
-        retval = []
-        for timestep in zip_longest(*batch):
-            timestep = np.array([idx for idx in timestep if idx is not None],
-                                dtype=np.int64)
-            retval.append(torch.from_numpy(timestep))
-        return retval[:-1], retval[1:]
+        x = np.full((len(batch), len(batch[0])),
+                    fill_value=self.pad_val, dtype=np.int64)
+        y = deepcopy(x)
+        for i, row in enumerate(batch):
+            x[i, :len(row) - 1] = row[:-1]
+            y[i, :len(row) - 1] = row[1:]
+        return torch.as_tensor(x), torch.as_tensor(y)
 
 
 def encode(fnames: list,
@@ -336,25 +340,23 @@ def main():
                      embedding_dim=embedding_dim,
                      seq_len=seq_len)
         criterion = nn.CrossEntropyLoss().to(device)
-        collate_fn = default_collate
-        dataset_cls = BioFixedLenDataset
+        train_dataset = BioFixedLenDataset(train_corpus, seq_len)
+        valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
     else:
         raise NotImplementedError
 
-    train_dataset = dataset_cls(train_corpus, seq_len)
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
                               shuffle=True,
-                              collate_fn=collate_fn,
+                              collate_fn=train_dataset.collate,
                               num_workers=4,
                               pin_memory=True)
     print('training dataset loaded with length', len(train_dataset))
 
-    valid_dataset = dataset_cls(valid_corpus, seq_len)
     valid_loader = DataLoader(valid_dataset,
                               batch_size=batch_size,
                               shuffle=False,
-                              collate_fn=collate_fn,
+                              collate_fn=valid_dataset.collate,
                               num_workers=2,
                               pin_memory=True)
     print('validation dataset loaded with length', len(valid_dataset))
