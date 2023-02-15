@@ -250,7 +250,7 @@ def train_categorical(model: nn.Module,
                 loss = criterion(pred, y)
                 valid_loss += loss.item()
             valid_loss /= len(valid_loader)
-            valid_perplexity = np.exp(valid_loss)
+            valid_perplexity = np.exp(valid_loss.cpu())
             valid_perplexity_per_epoch.append(valid_perplexity)
 
             print(f'epoch {epoch}:',
