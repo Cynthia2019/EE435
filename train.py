@@ -333,15 +333,17 @@ def parse_arguments():
 
     return parser.parse_args()
 
+
 def plot_learning_curve(train_perplexity, valid_perplexity, model_type):
     epochs = range(1, len(train_perplexity)+1)
-    plt.plot(epochs,train_perplexity, 'b', label='Train')
-    plt.plot(epochs,valid_perplexity, 'r', label='Validation')
+    plt.plot(epochs, train_perplexity, 'b', label='Train')
+    plt.plot(epochs, valid_perplexity, 'r', label='Validation')
     plt.xlabel('Epoch')
     plt.ylabel('Perplexity')
     plt.legend()
     plt.savefig(f'perplexity_plot_{model_type}.png')
     plt.show()
+
 
 def plot_confusion_matrix(confusion_matrix, model_type):
     categories = ['Real', 'Fake']
@@ -450,7 +452,7 @@ def main():
                                 valid_loader=valid_loader,
                                 epochs=epochs,
                                 device=device)
-    plot_learning_curve(results['train_perplexity'],results['valid_perplexity'], model_type)
+    plot_learning_curve(results['train_perplexity'], results['valid_perplexity'], model_type)
     test_results = test_categorical(model=model,
                                     test_corpus=test_corpus,
                                     seq_len=seq_len,
