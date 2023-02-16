@@ -310,7 +310,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     accuracy = (TP + TN) / (TP + FP + FN + TN)
     results = {
         'accuracy': accuracy,
-        'confusion_matrix': [[TP, FP], [FN, TN]],
+        'confusion_matrix': np.array([[TP, FP], [FN, TN]]),
     }
     return results
 
