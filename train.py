@@ -311,17 +311,30 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
     parser.add_argument('--model', type=str, default='FFNN')
+    parser.add_argument('-d_model', type=int, default=100)
+    parser.add_argument('-d_hidden', type=int, default=100)
+    parser.add_argument('-n_layers', type=int, default=2)
+    parser.add_argument('-batch_size', type=int, default=32)
+    parser.add_argument('-seq_len', type=int, default=5)
+    parser.add_argument('-printevery', type=int, default=5000)
+    parser.add_argument('-window', type=int, default=3)
+    parser.add_argument('-epochs', type=int, default=50)
+    parser.add_argument('-lr', type=float, default=1e-3)
+    parser.add_argument('-dropout', type=int, default=0.35)
+    parser.add_argument('-clip', type=int, default=2.0)
+
     return parser.parse_args()
 
 
 def main():
     params = parse_arguments()
 
-    seq_len = 5
-    embedding_dim = 32
-    batch_size = 32
-    epochs = 50
+    seq_len = params.seq_len
+    batch_size = params.batch_size
+    epochs = params.epochs
     model_type = params.model
+    lr = params.lr
+    embedding_dim = 32
 
     # device detection
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -375,7 +388,7 @@ def main():
                               pin_memory=True)
     print('validation dataset loaded with length', len(valid_dataset))
 
-    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optim = torch.optim.Adam(model.parameters(), lr=lr)
 
     # start training for categorical prediction
     results = train_categorical(model=model,
