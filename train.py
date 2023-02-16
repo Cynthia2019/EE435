@@ -9,6 +9,7 @@ from copy import deepcopy
 from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
+import matplotlib.pyplot as plt
 
 
 class Token:
@@ -254,7 +255,7 @@ def train_categorical(model: nn.Module,
             train_perplexity_per_epoch.append(train_perplexity)
 
             valid_loss = torch.tensor(0., device=device)
-            for x, y in valid_loader:
+            for i, (x, y) in enumerate(valid_loader):
                 x, y = x.to(device), y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
@@ -281,6 +282,7 @@ def train_categorical(model: nn.Module,
 
 
 def test_categorical(model, test_corpus, seq_len, vocab, device):
+    model = model.to(device)
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
     # confusion matrix for binary classification
@@ -308,7 +310,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     accuracy = (TP + TN) / (TP + FP + FN + TN)
     results = {
         'accuracy': accuracy,
-        'confusion_matrix': [TP, FP, FN, TN],
+        'confusion_matrix': [[TP, FP], [FN, TN]],
     }
     return results
 
@@ -330,6 +332,36 @@ def parse_arguments():
     parser.add_argument('-clip', type=int, default=2.0)
 
     return parser.parse_args()
+
+def plot_learning_curve(train_perplexity, valid_perplexity, model_type):
+    epochs = range(1, len(train_perplexity)+1)
+    plt.plot(epochs,train_perplexity, 'b', label='Train')
+    plt.plot(epochs,valid_perplexity, 'r', label='Validation')
+    plt.xlabel('Epoch')
+    plt.ylabel('Perplexity')
+    plt.legend()
+    plt.savefig(f'perplexity_plot_{model_type}.png')
+    plt.show()
+
+def plot_confusion_matrix(confusion_matrix, model_type):
+    categories = ['Real', 'Fake']
+    fig, ax = plt.subplots()
+    im = ax.imshow(confusion_matrix)
+    ax.set_xticks(np.arange(len(categories)))
+    ax.set_yticks(np.arange(len(categories)))
+    ax.set_xticklabels(categories)
+    ax.set_yticklabels(categories)
+    plt.setp(ax.get_xticklabels(), ha="right",
+             rotation_mode="anchor")
+    for i in range(len(categories)):
+        for j in range(len(categories)):
+            text = ax.text(j, i, confusion_matrix[i, j],
+                           ha="center", va="center", color="w",fontsize=15, fontweight='bold')
+    ax.set_title("Confusion Matrix")
+    ax.set_ylabel("Predicted")
+    ax.set_xlabel("Actual")
+    # Save the figure
+    plt.savefig(f'confusion_matrix_{model_type}.png')
 
 
 def main():
@@ -404,11 +436,13 @@ def main():
                                 valid_loader=valid_loader,
                                 epochs=epochs,
                                 device=device)
+    plot_learning_curve(results['train_perplexity'],results['valid_perplexity'], model_type)
     test_results = test_categorical(model=model,
                                     test_corpus=test_corpus,
                                     seq_len=seq_len,
                                     vocab=vocab,
                                     device=device)
+    plot_confusion_matrix(test_results['confusion_matrix'], model_type)
 
 
 if __name__ == '__main__':
