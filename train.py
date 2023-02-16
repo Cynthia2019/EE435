@@ -220,18 +220,17 @@ def train_categorical(model: nn.Module,
     valid_perplexity_per_epoch = []
     for epoch in range(1, epochs + 1):
         train_loss = torch.tensor(0., device=device)
-        train_perplexity, valid_perplexity = [], []
         t = time.time()
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
+            if i > 100:
+                break
             total_step += 1
             x, y = x.to(device), y.to(device)
             optim.zero_grad(set_to_none=True)
             pred = model(x)
             loss = criterion(pred, y)
-            train_perplexity.append(loss.detach())
-            loss = loss.mean()
             loss.backward()
             optim.step()
 
@@ -243,9 +242,7 @@ def train_categorical(model: nn.Module,
             # calcualte perplexity for train and valid set
             train_loss = float(train_loss.cpu())
             train_loss /= len(train_loader)
-            train_perplexity = torch.concatenate(train_perplexity)
-            train_perplexity = torch.exp(train_perplexity)
-            train_perplexity = float(train_perplexity.mean().cpu())
+            train_perplexity = np.exp(train_loss)
             train_perplexity_per_epoch.append(train_perplexity)
 
             valid_loss = torch.tensor(0., device=device)
@@ -253,12 +250,10 @@ def train_categorical(model: nn.Module,
                 x, y = x.to(device), y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
-                valid_perplexity.append(loss)
-                valid_loss += loss.mean()
+                valid_loss += loss
             valid_loss /= len(valid_loader)
-            valid_perplexity = torch.concatenate(valid_perplexity)
-            valid_perplexity = torch.exp(valid_perplexity)
-            valid_perplexity = float(valid_perplexity.mean().cpu())
+            valid_loss = float(valid_loss.cpu())
+            valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
 
             print(f'epoch {epoch}:',
@@ -366,7 +361,7 @@ def main():
         model = FFNN(num_embeddings=len(vocab),
                      embedding_dim=embedding_dim,
                      seq_len=seq_len)
-        criterion = nn.CrossEntropyLoss(reduction='none').to(device)
+        criterion = nn.CrossEntropyLoss().to(device)
         train_dataset = BioFixedLenDataset(train_corpus, seq_len)
         valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
     else:
