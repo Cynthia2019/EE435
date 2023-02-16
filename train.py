@@ -220,6 +220,7 @@ def train_categorical(model: nn.Module,
     valid_perplexity_per_epoch = []
     for epoch in range(1, epochs + 1):
         train_loss = torch.tensor(0., device=device)
+        train_perplexity, valid_perplexity = [], []
         t = time.time()
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
@@ -229,6 +230,8 @@ def train_categorical(model: nn.Module,
             optim.zero_grad(set_to_none=True)
             pred = model(x)
             loss = criterion(pred, y)
+            train_perplexity.append(loss.detach())
+            loss = loss.mean()
             loss.backward()
             optim.step()
 
@@ -240,7 +243,9 @@ def train_categorical(model: nn.Module,
             # calcualte perplexity for train and valid set
             train_loss = float(train_loss.cpu())
             train_loss /= len(train_loader)
-            train_perplexity = np.exp(train_loss)
+            train_perplexity = torch.concatenate(train_perplexity)
+            train_perplexity = torch.exp(train_perplexity)
+            train_perplexity = float(train_perplexity.mean().cpu())
             train_perplexity_per_epoch.append(train_perplexity)
 
             valid_loss = torch.tensor(0., device=device)
@@ -248,9 +253,12 @@ def train_categorical(model: nn.Module,
                 x, y = x.to(device), y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
-                valid_loss += loss.item()
+                valid_perplexity.append(loss)
+                valid_loss += loss.mean()
             valid_loss /= len(valid_loader)
-            valid_perplexity = np.exp(valid_loss.cpu())
+            valid_perplexity = torch.concatenate(valid_perplexity)
+            valid_perplexity = torch.exp(valid_perplexity)
+            valid_perplexity = float(valid_perplexity.mean().cpu())
             valid_perplexity_per_epoch.append(valid_perplexity)
 
             print(f'epoch {epoch}:',
@@ -302,7 +310,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
-    parser.add_argument('-model', type=str, default='FFNN')
+    parser.add_argument('--model', type=str, default='FFNN')
     return parser.parse_args()
 
 
@@ -345,7 +353,7 @@ def main():
         model = FFNN(num_embeddings=len(vocab),
                      embedding_dim=embedding_dim,
                      seq_len=seq_len)
-        criterion = nn.CrossEntropyLoss().to(device)
+        criterion = nn.CrossEntropyLoss(reduction='none').to(device)
         train_dataset = BioFixedLenDataset(train_corpus, seq_len)
         valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
     else:
