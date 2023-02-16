@@ -224,8 +224,6 @@ def train_categorical(model: nn.Module,
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
-            if i > 100:
-                break
             total_step += 1
             x, y = x.to(device), y.to(device)
             optim.zero_grad(set_to_none=True)
