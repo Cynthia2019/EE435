@@ -367,11 +367,9 @@ def plot_confusion_matrix(confusion_matrix, model_type):
 def main():
     params = parse_arguments()
 
-    seq_len = params.seq_len
-    batch_size = params.batch_size
-    epochs = params.epochs
-    model_type = params.model
-    lr = params.lr
+    seq_len, batch_size, epochs, model_type, lr, num_layers = \
+        params.seq_len, params.batch_size, params.epochs, params.model, params.lr, params.n_layers
+
     embedding_dim = 32
 
     # device detection
@@ -399,16 +397,32 @@ def main():
             assert seq[-2].tok == '<end_bio>', f'{i}: {seq[-20:]}'
             assert seq[0].tok != '<start_bio>', f'{i}: {seq[-20:]}'
 
+    vocab_size = len(vocab)
+    print("Vocab size: {}".format(vocab_size))
+
     # instantiate model and model specific parameters
     if model_type == 'FFNN':
-        model = FFNN(num_embeddings=len(vocab),
+        model = FFNN(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
                      seq_len=seq_len)
-        criterion = nn.CrossEntropyLoss().to(device)
+
         train_dataset = BioFixedLenDataset(train_corpus, seq_len)
         valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
+    elif model_type == "LSTM":
+        model = LSTM(num_embeddings=vocab_size,
+                     embedding_dim=embedding_dim,
+                     num_layers=num_layers)
+
+        # todo: pad_val should be an index not in vocab
+        pad_val = vocab_size + 10
+        # todo: changing training code to accommodate LSTM
+        train_dataset = BioVariableLenDataset(train_corpus, pad_val)
+        valid_dataset = BioVariableLenDataset(valid_corpus, pad_val)
     else:
+        print("Neither FFNN nor LSTM")
         raise NotImplementedError
+
+    criterion = nn.CrossEntropyLoss().to(device)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
