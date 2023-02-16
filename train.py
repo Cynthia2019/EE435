@@ -206,6 +206,16 @@ def encode(fnames: list,
     return vocab, corpus
 
 
+def save_model(model: nn.Module):
+    if type(model) == FFNN:
+        print("Model is FFN")
+        path = "FNN_model.pth"
+    elif type(model) == LSTM:
+        print("Model is LSTM")
+        path = "LSTM_model.pth"
+    torch.save(model, path)
+
+
 def train_categorical(model: nn.Module,
                       optim: torch.optim.Optimizer,
                       criterion: Callable,
@@ -224,8 +234,6 @@ def train_categorical(model: nn.Module,
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
-            if i > 100:
-                break
             total_step += 1
             x, y = x.to(device), y.to(device)
             optim.zero_grad(set_to_none=True)
@@ -239,7 +247,7 @@ def train_categorical(model: nn.Module,
         with torch.inference_mode():
             model.eval()
 
-            # calcualte perplexity for train and valid set
+            # calculate perplexity for train and valid set
             train_loss = float(train_loss.cpu())
             train_loss /= len(train_loader)
             train_perplexity = np.exp(train_loss)
@@ -266,6 +274,9 @@ def train_categorical(model: nn.Module,
         'train_perplexity': train_perplexity_per_epoch,
         'valid_perplexity': valid_perplexity_per_epoch,
     }
+
+    save_model(model.cpu())
+
     return results
 
 
@@ -305,7 +316,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
-    parser.add_argument('--model', type=str, default='FFNN')
+    parser.add_argument('-model', type=str, default='FFNN')
     parser.add_argument('-d_model', type=int, default=100)
     parser.add_argument('-d_hidden', type=int, default=100)
     parser.add_argument('-n_layers', type=int, default=2)
