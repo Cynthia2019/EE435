@@ -214,7 +214,9 @@ def save_model(model: nn.Module):
     elif type(model) == LSTM:
         print("Model is LSTM")
         path = "LSTM_model.pth"
-    torch.save(model, path)
+    else:
+        raise NotImplementedError
+    torch.save(model.state_dict(), path)
 
 
 def train_categorical(model: nn.Module,
@@ -276,7 +278,7 @@ def train_categorical(model: nn.Module,
         'valid_perplexity': valid_perplexity_per_epoch,
     }
 
-    save_model(model.cpu())
+    save_model(model)
 
     return results
 
@@ -335,7 +337,7 @@ def parse_arguments():
 
 
 def plot_learning_curve(train_perplexity, valid_perplexity, model_type):
-    epochs = range(1, len(train_perplexity)+1)
+    epochs = range(1, len(train_perplexity) + 1)
     plt.plot(epochs, train_perplexity, 'b', label='Train')
     plt.plot(epochs, valid_perplexity, 'r', label='Validation')
     plt.xlabel('Epoch')
@@ -358,7 +360,7 @@ def plot_confusion_matrix(confusion_matrix, model_type):
     for i in range(len(categories)):
         for j in range(len(categories)):
             text = ax.text(j, i, confusion_matrix[i, j],
-                           ha="center", va="center", color="w",fontsize=15, fontweight='bold')
+                           ha="center", va="center", color="w", fontsize=15, fontweight='bold')
     ax.set_title("Confusion Matrix")
     ax.set_ylabel("Predicted")
     ax.set_xlabel("Actual")
@@ -415,11 +417,9 @@ def main():
                      embedding_dim=embedding_dim,
                      num_layers=num_layers)
 
-        # todo: pad_val should be an index not in vocab
-        pad_val = vocab_size + 10
         # todo: changing training code to accommodate LSTM
-        train_dataset = BioVariableLenDataset(train_corpus, pad_val)
-        valid_dataset = BioVariableLenDataset(valid_corpus, pad_val)
+        train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
+        valid_dataset = BioVariableLenDataset(valid_corpus, vocab_size)
     else:
         print("Neither FFNN nor LSTM")
         raise NotImplementedError
