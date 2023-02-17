@@ -31,12 +31,14 @@ class Token:
 
 
 class SequenceModel(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, pad: bool = False):
+    def __init__(self, num_embeddings: int, embedding_dim: int,
+                 pad: bool = False, device: str = 'cuda'):
         super().__init__()
         self.in_embedding = nn.Embedding(num_embeddings + int(pad),
                                          embedding_dim,
                                          padding_idx=num_embeddings if pad else None)
         self.out_embedding = nn.Linear(embedding_dim, num_embeddings, bias=False)
+        self.device = device
 
     def init_params(self):
         def initialize(m: nn.Module):
@@ -53,8 +55,8 @@ class SequenceModel(nn.Module):
 
 
 class FFNN(SequenceModel):
-    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int):
-        super().__init__(num_embeddings, embedding_dim)
+    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int, device: str):
+        super().__init__(num_embeddings, embedding_dim, device=device)
 
         seq_len *= embedding_dim
         self.linear1 = nn.Linear(seq_len, embedding_dim)
@@ -63,6 +65,7 @@ class FFNN(SequenceModel):
         self.out_embedding.weight = self.in_embedding.weight
 
     def forward(self, x: torch.Tensor):
+        x = x.to(self.device)
         x = self.in_embedding(x)
         x = torch.flatten(x, 1)
         x = self.linear1(x)
@@ -72,8 +75,8 @@ class FFNN(SequenceModel):
 
 
 class LSTM(SequenceModel):
-    def __init__(self, num_embeddings: int, embedding_dim: int, num_layers: int):
-        super().__init__(num_embeddings, embedding_dim, pad=True)
+    def __init__(self, num_embeddings: int, embedding_dim: int, num_layers: int, device: str):
+        super().__init__(num_embeddings, embedding_dim, pad=True, device=device)
         self.lstm = nn.LSTM(embedding_dim, embedding_dim, num_layers, batch_first=True)
 
         self.init_params()
@@ -83,6 +86,7 @@ class LSTM(SequenceModel):
 
     def forward(self, x):
         x, lengths = x
+        x = x.to(self.device)
         x = self.in_embedding(x)
         x = nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
         x, _ = self.lstm(x)
@@ -238,7 +242,7 @@ def train_categorical(model: nn.Module,
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
             total_step += 1
-            x, y = x.to(device), y.to(device)
+            y = y.to(device)
             optim.zero_grad(set_to_none=True)
             pred = model(x)
             loss = criterion(pred, y)
@@ -408,14 +412,16 @@ def main():
     if model_type == 'FFNN':
         model = FFNN(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
-                     seq_len=seq_len)
+                     seq_len=seq_len,
+                     device=device)
 
         train_dataset = BioFixedLenDataset(train_corpus, seq_len)
         valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
     elif model_type == "LSTM":
         model = LSTM(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
-                     num_layers=num_layers)
+                     num_layers=num_layers,
+                     device=device)
 
         # todo: changing training code to accommodate LSTM
         train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
