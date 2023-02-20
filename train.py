@@ -147,7 +147,9 @@ class BioVariableLenDataset(Dataset):
         for i, row in enumerate(batch):
             x[i, :len(row) - 1] = row[:-1]
             y[i, :len(row) - 1] = row[1:]
-        return (torch.as_tensor(x), lengths), torch.as_tensor(y)
+        y = torch.as_tensor(y)
+        y = nn.utils.rnn.pack_padded_sequence(y, lengths, batch_first=True)
+        return (torch.as_tensor(x), lengths), y
 
 
 def encode(fnames: list,
