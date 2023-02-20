@@ -44,6 +44,10 @@ class SequenceModel(nn.Module):
         def initialize(m: nn.Module):
             if isinstance(m, nn.Embedding):
                 nn.init.xavier_normal_(m.weight)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                if getattr(m, 'bias', None) is not None:
+                    nn.init.zeros_(m.bias)
             elif type(m) in [nn.LSTM, nn.LSTMCell]:
                 for name, param in m.named_parameters():
                     if 'weight' in name:
@@ -55,11 +59,13 @@ class SequenceModel(nn.Module):
 
 
 class FFNN(SequenceModel):
-    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int, device: str):
+    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int,
+                 drop_ratio: float, device: str):
         super().__init__(num_embeddings, embedding_dim, device=device)
 
         seq_len *= embedding_dim
-        self.linear1 = nn.Linear(seq_len, embedding_dim)
+        self.linear = nn.Linear(seq_len, embedding_dim)
+        self.dropout = nn.Dropout(drop_ratio) if drop_ratio else None
 
         self.init_params()
         self.out_embedding.weight = self.in_embedding.weight
@@ -68,16 +74,20 @@ class FFNN(SequenceModel):
         x = x.to(self.device)
         x = self.in_embedding(x)
         x = torch.flatten(x, 1)
-        x = self.linear1(x)
+        x = self.linear(x)
         x = torch.tanh(x)
+        x = self.dropout(x) if self.dropout else x
         x = self.out_embedding(x)
         return x
 
 
 class LSTM(SequenceModel):
-    def __init__(self, num_embeddings: int, embedding_dim: int, num_layers: int, device: str):
-        super().__init__(num_embeddings, embedding_dim, pad=True, device=device)
-        self.lstm = nn.LSTM(embedding_dim, embedding_dim, num_layers, batch_first=True)
+    def __init__(self, num_embeddings: int, embedding_dim: int, num_layers: int,
+                 drop_ratio: float, device: str):
+        super().__init__(num_embeddings, embedding_dim,
+                         pad=True, device=device)
+        self.lstm = nn.LSTM(embedding_dim, embedding_dim, num_layers,
+                            dropout=drop_ratio, batch_first=True)
 
         self.init_params()
         assert self.out_embedding.weight.shape == self.in_embedding.weight[:-1].shape
@@ -143,7 +153,8 @@ class BioVariableLenDataset(Dataset):
         lengths = [len(sample) for sample in batch]
         x = np.full((len(batch), len(batch[0])),
                     fill_value=self.pad_val, dtype=np.int64)
-        y = deepcopy(x)
+        y = np.full((len(batch), len(batch[0])),
+                    fill_value=self.pad_val, dtype=np.int64)
         for i, row in enumerate(batch):
             x[i, :len(row) - 1] = row[:-1]
             y[i, :len(row) - 1] = row[1:]
@@ -377,8 +388,14 @@ def plot_confusion_matrix(confusion_matrix, model_type):
 def main():
     params = parse_arguments()
 
-    seq_len, batch_size, epochs, model_type, lr, num_layers = \
-        params.seq_len, params.batch_size, params.epochs, params.model, params.lr, params.n_layers
+    seq_len, batch_size, epochs, model_type, lr, num_layers, dropout = \
+        (params.seq_len,
+         params.batch_size,
+         params.epochs,
+         params.model,
+         params.lr,
+         params.n_layers,
+         params.dropout)
 
     embedding_dim = 32
 
@@ -415,6 +432,7 @@ def main():
         model = FFNN(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
                      seq_len=seq_len,
+                     drop_ratio=dropout,
                      device=device)
 
         train_dataset = BioFixedLenDataset(train_corpus, seq_len)
@@ -423,6 +441,7 @@ def main():
         model = LSTM(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
                      num_layers=num_layers,
+                     drop_ratio=dropout,
                      device=device)
 
         # todo: changing training code to accommodate LSTM
