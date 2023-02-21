@@ -5,7 +5,6 @@ import torch
 import argparse
 import numpy as np
 from torch import nn
-from copy import deepcopy
 from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
@@ -59,12 +58,12 @@ class SequenceModel(nn.Module):
 
 
 class FFNN(SequenceModel):
-    def __init__(self, num_embeddings: int, embedding_dim: int, seq_len: int,
+    def __init__(self, num_embeddings: int, embedding_dim: int, window: int,
                  drop_ratio: float, device: str):
         super().__init__(num_embeddings, embedding_dim, device=device)
 
-        seq_len *= embedding_dim
-        self.linear = nn.Linear(seq_len, embedding_dim)
+        window *= embedding_dim
+        self.linear = nn.Linear(window, embedding_dim)
         self.dropout = nn.Dropout(drop_ratio) if drop_ratio else None
 
         self.init_params()
@@ -105,11 +104,11 @@ class LSTM(SequenceModel):
 
 
 class BioFixedLenDataset(Dataset):
-    def __init__(self, corpus: list, seq_len: int):
-        self.seq_len = seq_len
+    def __init__(self, corpus: list, window: int):
+        self.window = window
 
         self.corpus = [np.array(bio, dtype=np.int64) for bio in corpus]
-        self.lengths = [len(bio) - seq_len for bio in self.corpus]
+        self.lengths = [len(bio) - window for bio in self.corpus]
         self.total_length = sum(self.lengths)
 
         for i, bio_len in enumerate(self.lengths):
@@ -123,8 +122,8 @@ class BioFixedLenDataset(Dataset):
         idx = np.searchsorted(self.lengths, item, side='right') - 1
         local_idx = item - self.lengths[idx]
         selected_bio = self.corpus[idx]
-        x = selected_bio[local_idx:local_idx + self.seq_len]
-        y = selected_bio[local_idx + self.seq_len]
+        x = selected_bio[local_idx:local_idx + self.window]
+        y = selected_bio[local_idx + self.window]
         return x, y
 
     def __len__(self):
@@ -239,6 +238,7 @@ def save_model(model: nn.Module):
 def train_categorical(model: nn.Module,
                       optim: torch.optim.Optimizer,
                       criterion: Callable,
+                      clip: float,
                       train_loader: DataLoader,
                       valid_loader: DataLoader,
                       epochs: int,
@@ -260,6 +260,7 @@ def train_categorical(model: nn.Module,
             pred = model(x)
             loss = criterion(pred, y)
             loss.backward()
+            nn.utils.clip_grad_value_(model.parameters(), clip)
             optim.step()
 
             with torch.inference_mode():
@@ -300,7 +301,7 @@ def train_categorical(model: nn.Module,
     return results
 
 
-def test_categorical(model, test_corpus, seq_len, vocab, device):
+def test_categorical(model, test_corpus, window, vocab, device):
     model = model.to(device)
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
@@ -308,7 +309,7 @@ def test_categorical(model, test_corpus, seq_len, vocab, device):
     # TP: true positive (label REAL is predicted correctly)
     TP, FP, FN, TN = 0, 0, 0, 0
     for data in test_data:
-        x = torch.tensor(data[-seq_len - 1:-1], device=device)
+        x = torch.tensor(data[-window - 1:-1], device=device)
         y = torch.tensor(data[-1], device=device)
         logits = model(x.unsqueeze(0))
         logits.squeeze_(0)
@@ -342,13 +343,14 @@ def parse_arguments():
     parser.add_argument('-d_hidden', type=int, default=100)
     parser.add_argument('-n_layers', type=int, default=2)
     parser.add_argument('-batch_size', type=int, default=32)
-    parser.add_argument('-seq_len', type=int, default=5)
+    parser.add_argument('-window', type=int, default=5)
     parser.add_argument('-printevery', type=int, default=5000)
-    parser.add_argument('-window', type=int, default=3)
     parser.add_argument('-epochs', type=int, default=50)
     parser.add_argument('-lr', type=float, default=1e-3)
     parser.add_argument('-dropout', type=int, default=0.35)
     parser.add_argument('-clip', type=int, default=2.0)
+    parser.add_argument('-weight', type=str, default='')
+    parser.add_argument('-weight_decay', type=float, default=0.00001)
 
     return parser.parse_args()
 
@@ -388,14 +390,17 @@ def plot_confusion_matrix(confusion_matrix, model_type):
 def main():
     params = parse_arguments()
 
-    seq_len, batch_size, epochs, model_type, lr, num_layers, dropout = \
-        (params.seq_len,
+    window, batch_size, epochs, model_type, lr, num_layers, dropout, clip, weight, wd = \
+        (params.window,
          params.batch_size,
          params.epochs,
          params.model,
          params.lr,
          params.n_layers,
-         params.dropout)
+         params.dropout,
+         params.clip,
+         params.weight,
+         params.weight_decay)
 
     embedding_dim = 32
 
@@ -408,14 +413,14 @@ def main():
     # read tokens, init sequences, dataset, and loader
     vocab, train_corpus = encode(['./mix.train.tok', 'fake.train.tok', 'real.train.tok'],
                                  count_threshold=3,
-                                 length_threshold=seq_len)
+                                 length_threshold=window)
     _, valid_corpus = encode(['./mix.valid.tok', 'fake.valid.tok', 'real.valid.tok'],
                              count_threshold=-1,
-                             length_threshold=seq_len,
+                             length_threshold=window,
                              vocab=vocab)
     _, test_corpus = encode(['./mix.test.tok', 'fake.test.tok', 'real.test.tok'],
                             count_threshold=-1,
-                            length_threshold=seq_len,
+                            length_threshold=window,
                             vocab=vocab)
 
     for i, corpus in enumerate([train_corpus, valid_corpus, test_corpus]):
@@ -431,12 +436,12 @@ def main():
     if model_type == 'FFNN':
         model = FFNN(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
-                     seq_len=seq_len,
+                     window=window,
                      drop_ratio=dropout,
                      device=device)
 
-        train_dataset = BioFixedLenDataset(train_corpus, seq_len)
-        valid_dataset = BioFixedLenDataset(valid_corpus, seq_len)
+        train_dataset = BioFixedLenDataset(train_corpus, window)
+        valid_dataset = BioFixedLenDataset(valid_corpus, window)
     elif model_type == "LSTM":
         model = LSTM(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
@@ -469,20 +474,24 @@ def main():
                               pin_memory=True)
     print('validation dataset loaded with length', len(valid_dataset))
 
-    optim = torch.optim.Adam(model.parameters(), lr=lr)
+    if weight:
+        model.load_state_dict(torch.load(weight))
+    else:
+        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
 
-    # start training for categorical prediction
-    results = train_categorical(model=model,
-                                optim=optim,
-                                criterion=criterion,
-                                train_loader=train_loader,
-                                valid_loader=valid_loader,
-                                epochs=epochs,
-                                device=device)
-    plot_learning_curve(results['train_perplexity'], results['valid_perplexity'], model_type)
+        # start training for categorical prediction
+        results = train_categorical(model=model,
+                                    optim=optim,
+                                    criterion=criterion,
+                                    clip=clip,
+                                    train_loader=train_loader,
+                                    valid_loader=valid_loader,
+                                    epochs=epochs,
+                                    device=device)
+        plot_learning_curve(results['train_perplexity'], results['valid_perplexity'], model_type)
     test_results = test_categorical(model=model,
                                     test_corpus=test_corpus,
-                                    seq_len=seq_len,
+                                    window=window,
                                     vocab=vocab,
                                     device=device)
     plot_confusion_matrix(test_results['confusion_matrix'], model_type)
