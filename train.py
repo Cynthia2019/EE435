@@ -152,7 +152,7 @@ class BioVariableLenDataset(Dataset):
 
     def collate(self, batch: list):
         batch = sorted(batch, key=len, reverse=True)
-        lengths = [len(sample) for sample in batch]
+        lengths = [len(sample) - 1 for sample in batch]
         x = np.full((len(batch), len(batch[0])),
                     fill_value=self.pad_val, dtype=np.int64)
         y = np.full((len(batch), len(batch[0])),
