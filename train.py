@@ -338,19 +338,17 @@ def test_categorical(model, test_corpus, window, vocab, device):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
-    parser.add_argument('-model', type=str, default='FFNN')
-    parser.add_argument('-d_model', type=int, default=100)
-    parser.add_argument('-d_hidden', type=int, default=100)
-    parser.add_argument('-n_layers', type=int, default=2)
-    parser.add_argument('-batch_size', type=int, default=32)
-    parser.add_argument('-window', type=int, default=5)
-    parser.add_argument('-printevery', type=int, default=5000)
-    parser.add_argument('-epochs', type=int, default=50)
-    parser.add_argument('-lr', type=float, default=1e-3)
-    parser.add_argument('-dropout', type=int, default=0.35)
-    parser.add_argument('-clip', type=int, default=2.0)
-    parser.add_argument('-weight', type=str, default='')
-    parser.add_argument('-weight_decay', type=float, default=0.00001)
+    parser.add_argument('--model', type=str, default='FFNN')
+    parser.add_argument('--embedding_dim', type=int, default=128)
+    parser.add_argument('--num_layers', type=int, default=2)
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--window', type=int, default=5)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--dropout', type=int, default=0.2)
+    parser.add_argument('--clip', type=int, default=2.0)
+    parser.add_argument('--weight', type=str, default='')
+    parser.add_argument('--weight_decay', type=float, default=0.00001)
 
     return parser.parse_args()
 
@@ -390,19 +388,31 @@ def plot_confusion_matrix(confusion_matrix, model_type):
 def main():
     params = parse_arguments()
 
-    window, batch_size, epochs, model_type, lr, num_layers, dropout, clip, weight, wd = \
-        (params.window,
-         params.batch_size,
-         params.epochs,
-         params.model,
-         params.lr,
-         params.n_layers,
-         params.dropout,
-         params.clip,
-         params.weight,
-         params.weight_decay)
-
-    embedding_dim = 32
+    (
+        model_type,
+        embedding_dim,
+        num_layers,
+        batch_size,
+        window,
+        epochs,
+        lr,
+        dropout,
+        clip,
+        weight,
+        weight_decay
+    ) = (
+        params.model,
+        params.embedding_dim,
+        params.num_layers,
+        params.batch_size,
+        params.window,
+        params.epochs,
+        params.lr,
+        params.dropout,
+        params.clip,
+        params.weight,
+        params.weight_decay
+    )
 
     # device detection
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -411,14 +421,14 @@ def main():
         print('WARNING: cuda not detected', file=sys.stderr)
 
     # read tokens, init sequences, dataset, and loader
-    vocab, train_corpus = encode(['./mix.train.tok', 'fake.train.tok', 'real.train.tok'],
+    vocab, train_corpus = encode(['./mix.train.tok'],
                                  count_threshold=3,
                                  length_threshold=window)
-    _, valid_corpus = encode(['./mix.valid.tok', 'fake.valid.tok', 'real.valid.tok'],
+    _, valid_corpus = encode(['./mix.valid.tok'],
                              count_threshold=-1,
                              length_threshold=window,
                              vocab=vocab)
-    _, test_corpus = encode(['./mix.test.tok', 'fake.test.tok', 'real.test.tok'],
+    _, test_corpus = encode(['./mix.test.tok'],
                             count_threshold=-1,
                             length_threshold=window,
                             vocab=vocab)
@@ -477,7 +487,7 @@ def main():
     if weight:
         model.load_state_dict(torch.load(weight))
     else:
-        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # start training for categorical prediction
         results = train_categorical(model=model,
