@@ -1,14 +1,17 @@
+import os
 import sys
 import time
 import tqdm
 import torch
+import pickle
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
+
 from torch import nn
 from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
-import matplotlib.pyplot as plt
 
 
 class Token:
@@ -223,13 +226,13 @@ def encode(fnames: list,
     return vocab, corpus
 
 
-def save_model(model: nn.Module):
+def save_model(model: nn.Module, path: str):
     if type(model) == FFNN:
-        print("Model is FFN")
-        path = "FNN_model.pth"
+        print('Model is FFNN')
+        path = os.path.join(path, 'FFNN.pth')
     elif type(model) == LSTM:
-        print("Model is LSTM")
-        path = "LSTM_model.pth"
+        print('Model is LSTM')
+        path = os.path.join(path, 'LSTM.pth')
     else:
         raise NotImplementedError
     torch.save(model.state_dict(), path)
@@ -242,10 +245,12 @@ def train_categorical(model: nn.Module,
                       train_loader: DataLoader,
                       valid_loader: DataLoader,
                       epochs: int,
+                      path: str,
                       device: str):
     model = model.to(device)
     print('training started')
     total_step = 0
+    best = float('inf')
     train_perplexity_per_epoch = []
     valid_perplexity_per_epoch = []
     for epoch in range(1, epochs + 1):
@@ -284,6 +289,9 @@ def train_categorical(model: nn.Module,
             valid_loss = float(valid_loss.cpu())
             valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
+            if valid_perplexity < best:
+                save_model(model, path)
+                best = valid_perplexity
 
             print(f'epoch {epoch}:',
                   f'loss {train_loss},',
@@ -295,8 +303,8 @@ def train_categorical(model: nn.Module,
         'train_perplexity': train_perplexity_per_epoch,
         'valid_perplexity': valid_perplexity_per_epoch,
     }
-
-    save_model(model)
+    with open(os.path.join(path, 'train_results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
 
     return results
 
@@ -338,7 +346,7 @@ def test_categorical(model, test_corpus, window, vocab, device):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
-    parser.add_argument('--model', type=str, default='FFNN')
+    parser.add_argument('--model_type', type=str, default='FFNN')
     parser.add_argument('--embedding_dim', type=int, default=128)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--batch_size', type=int, default=128)
@@ -347,24 +355,25 @@ def parse_arguments():
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--dropout', type=int, default=0.2)
     parser.add_argument('--clip', type=int, default=2.0)
-    parser.add_argument('--weight', type=str, default='')
+    parser.add_argument('--load_path', type=str, default='')
     parser.add_argument('--weight_decay', type=float, default=0.00001)
 
     return parser.parse_args()
 
 
-def plot_learning_curve(train_perplexity, valid_perplexity, model_type):
+def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
+                        model_type: str, path: str):
     epochs = range(1, len(train_perplexity) + 1)
     plt.plot(epochs, train_perplexity, 'b', label='Train')
     plt.plot(epochs, valid_perplexity, 'r', label='Validation')
     plt.xlabel('Epoch')
     plt.ylabel('Perplexity')
     plt.legend()
-    plt.savefig(f'perplexity_plot_{model_type}.png')
+    plt.savefig(os.path.join(path, f'perplexity_plot_{model_type}.png'))
     plt.show()
 
 
-def plot_confusion_matrix(confusion_matrix, model_type):
+def plot_confusion_matrix(confusion_matrix: np.ndarray, model_type: str, path: str):
     categories = ['Real', 'Fake']
     fig, ax = plt.subplots()
     im = ax.imshow(confusion_matrix)
@@ -382,7 +391,7 @@ def plot_confusion_matrix(confusion_matrix, model_type):
     ax.set_ylabel("Predicted")
     ax.set_xlabel("Actual")
     # Save the figure
-    plt.savefig(f'confusion_matrix_{model_type}.png')
+    plt.savefig(os.path.join(path, f'confusion_matrix_{model_type}.png'))
 
 
 def main():
@@ -398,10 +407,10 @@ def main():
         lr,
         dropout,
         clip,
-        weight,
+        load_path,
         weight_decay
     ) = (
-        params.model,
+        params.model_type,
         params.embedding_dim,
         params.num_layers,
         params.batch_size,
@@ -410,7 +419,7 @@ def main():
         params.lr,
         params.dropout,
         params.clip,
-        params.weight,
+        params.load_path,
         params.weight_decay
     )
 
@@ -463,8 +472,7 @@ def main():
         train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
         valid_dataset = BioVariableLenDataset(valid_corpus, vocab_size)
     else:
-        print("Neither FFNN nor LSTM")
-        raise NotImplementedError
+        raise NotImplementedError("Neither FFNN nor LSTM")
 
     criterion = nn.CrossEntropyLoss().to(device)
 
@@ -484,9 +492,13 @@ def main():
                               pin_memory=True)
     print('validation dataset loaded with length', len(valid_dataset))
 
-    if weight:
-        model.load_state_dict(torch.load(weight))
+    if load_path:
+        model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth')))
+        path = load_path
     else:
+        path = os.path.join(model_type, f'{int(time.time())}')
+        assert not os.path.exists(path)
+        os.makedirs(path)
         optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # start training for categorical prediction
@@ -497,14 +509,18 @@ def main():
                                     train_loader=train_loader,
                                     valid_loader=valid_loader,
                                     epochs=epochs,
+                                    path=path,
                                     device=device)
-        plot_learning_curve(results['train_perplexity'], results['valid_perplexity'], model_type)
+        plot_learning_curve(results['train_perplexity'],
+                            results['valid_perplexity'],
+                            model_type,
+                            path)
     test_results = test_categorical(model=model,
                                     test_corpus=test_corpus,
                                     window=window,
                                     vocab=vocab,
                                     device=device)
-    plot_confusion_matrix(test_results['confusion_matrix'], model_type)
+    plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
 if __name__ == '__main__':
