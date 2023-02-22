@@ -366,7 +366,6 @@ def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
     epochs = range(1, len(train_perplexity) + 1)
     plt.plot(epochs, train_perplexity, 'b', label='Train')
     plt.plot(epochs, valid_perplexity, 'r', label='Validation')
-    plt.xticks(list(epochs))
     plt.xlabel('Epoch')
     plt.ylabel('Perplexity')
     plt.legend()
