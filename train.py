@@ -15,6 +15,7 @@ from torch.utils.data import Dataset, DataLoader, default_collate
 from sklearn.neighbors import KNeighborsClassifier
 from scipy.spatial.distance import jensenshannon
 
+
 class Token:
     __slots__ = ['tok', 'idx', 'count']
 
@@ -309,6 +310,7 @@ def train_categorical(model: nn.Module,
 
     return results
 
+
 def compute_seq_prob(model, seq, window, vocab, device):
     num_windows = len(seq) - window
     # initalize a tensor of length vocab_size
@@ -316,7 +318,7 @@ def compute_seq_prob(model, seq, window, vocab, device):
     for i in range(num_windows):
         x = seq[i:i + window]
         y = model(torch.tensor(x, device=device).unsqueeze(0))
-        log_prob += torch.log_softmax(y.squeeze(0), dim=0) 
+        log_prob += torch.log_softmax(y.squeeze(0), dim=0)
     return log_prob
 
 
@@ -356,17 +358,13 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
             if label == vocab['[FAKE]'].idx:
                 TN += 1
             else:
-                FN += 1       
+                FN += 1
     accuracy = (TP + TN) / (TP + FP + FN + TN)
     results = {
         'accuracy': accuracy,
         'confusion_matrix': np.array([[TP, FP], [FN, TN]]),
     }
     return results
-
-            
-
-
 
 
 def test_LSTM(model, test_corpus, vocab, device):
@@ -580,18 +578,18 @@ def main():
                             path)
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
-                                    test_corpus=test_corpus,
-                                    vocab=vocab,
-                                    device=device)
+                                 test_corpus=test_corpus,
+                                 vocab=vocab,
+                                 device=device)
         plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
     else:
         test_results = test_FFNN(model=model,
-                                    test_corpus=test_corpus,
-                                    train_corpus=train_corpus,
-                                    window=window,
-                                    vocab=vocab,
-                                    device=device)
+                                 test_corpus=test_corpus,
+                                 train_corpus=train_corpus,
+                                 window=window,
+                                 vocab=vocab,
+                                 device=device)
         plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
