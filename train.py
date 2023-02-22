@@ -162,7 +162,7 @@ class BioVariableLenDataset(Dataset):
             y[i, :len(row) - 1] = row[1:]
         y = torch.as_tensor(y)
         y = nn.utils.rnn.pack_padded_sequence(y, lengths, batch_first=True)
-        return (torch.as_tensor(x), lengths), y
+        return (torch.as_tensor(x), lengths), y.data
 
 
 def encode(fnames: list,
@@ -281,7 +281,7 @@ def train_categorical(model: nn.Module,
 
             valid_loss = torch.tensor(0., device=device)
             for i, (x, y) in enumerate(valid_loader):
-                x, y = x.to(device), y.to(device)
+                y = y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
                 valid_loss += loss
@@ -366,6 +366,7 @@ def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
     epochs = range(1, len(train_perplexity) + 1)
     plt.plot(epochs, train_perplexity, 'b', label='Train')
     plt.plot(epochs, valid_perplexity, 'r', label='Validation')
+    plt.xticks(list(epochs))
     plt.xlabel('Epoch')
     plt.ylabel('Perplexity')
     plt.legend()
@@ -515,12 +516,16 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
-    test_results = test_categorical(model=model,
+    if model_type != "LSTM":
+        test_results = test_categorical(model=model,
                                     test_corpus=test_corpus,
                                     window=window,
                                     vocab=vocab,
                                     device=device)
-    plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
+        plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
+
+    else:
+        print("LSTM Test Unimplemented");
 
 
 if __name__ == '__main__':
