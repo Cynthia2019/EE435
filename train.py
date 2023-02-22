@@ -377,16 +377,14 @@ def test_LSTM(model, test_corpus, vocab, device):
     model = model.to(device)
     model.eval()
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
     TP, FP, FN, TN = 0, 0, 0, 0
     print('testing started')
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
-        x = x.to(device)
+        x = (x[0].to(device), x[1])
         y = y.to(device)
         final_token_logits = model(x)[-1]
         label = y[-1]
-        print(final_token_logits)
-        print(label)
         if final_token_logits[vocab['[FAKE]'].idx] > final_token_logits[vocab['[REAL]'].idx]:
             pred = vocab['[FAKE]'].idx
         else:
