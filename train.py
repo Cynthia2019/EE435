@@ -12,7 +12,8 @@ from torch import nn
 from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
-
+from sklearn.neighbors import KNeighborsClassifier
+from scipy.spatial.distance import jensenshannon
 
 class Token:
     __slots__ = ['tok', 'idx', 'count']
@@ -259,6 +260,8 @@ def train_categorical(model: nn.Module,
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
+            if i>0:
+                break
             total_step += 1
             y = y.to(device)
             optim.zero_grad(set_to_none=True)
@@ -281,6 +284,8 @@ def train_categorical(model: nn.Module,
 
             valid_loss = torch.tensor(0., device=device)
             for i, (x, y) in enumerate(valid_loader):
+                if i>0:
+                    break
                 y = y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
@@ -308,24 +313,82 @@ def train_categorical(model: nn.Module,
 
     return results
 
+def compute_seq_prob(model, seq, window, vocab, device):
+    num_windows = len(seq) - window
+    # initalize a tensor of length vocab_size
+    log_prob = torch.zeros(len(vocab), device=device)
+    for i in range(num_windows):
+        x = seq[i:i + window]
+        y = model(torch.tensor(x, device=device).unsqueeze(0))
+        log_prob += torch.log_softmax(y.squeeze(0), dim=0) 
+    return log_prob
 
-def test_categorical(model, test_corpus, window, vocab, device):
+def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
+    # fit a KNN to the training data
+    # initialize two np array
+    X = []
+    y = []
+    for seq in train_corpus:
+        print(seq)
+        seq_prob = compute_seq_prob(model, seq, window, vocab, device)
+        X.append(seq_prob.detach().numpy())
+        y.append(seq[-1])
+    X = np.array(X)
+    y = np.array(y)
+    knn = KNeighborsClassifier(n_neighbors=1, metric=jensenshannon)
+    knn.fit(X, y)
+    print('KNN fitted')
+    # compute the log probability of each sequence in the test set
     model = model.to(device)
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
-    # confusion matrix for binary classification
-    # TP: true positive (label REAL is predicted correctly)
     TP, FP, FN, TN = 0, 0, 0, 0
-    for data in test_data:
-        x = torch.tensor(data[-window - 1:-1], device=device)
-        y = torch.tensor(data[-1], device=device)
-        logits = model(x.unsqueeze(0))
-        logits.squeeze_(0)
-        if logits[vocab['[FAKE]'].idx] > logits[vocab['[REAL]'].idx]:
+    for seq in test_data:
+        seq_prob = compute_seq_prob(model, seq, window, vocab, device)
+        # get the label of the sequence
+        label = seq[-1]
+        predicted_label = knn.predict(seq_prob)
+        if predicted_label == vocab['[REAL]'].idx:
+            if label == vocab['[REAL]'].idx:
+                TP += 1
+            else:
+                FP += 1
+        else:
+            if label == vocab['[FAKE]'].idx:
+                TN += 1
+            else:
+                FN += 1       
+    accuracy = (TP + TN) / (TP + FP + FN + TN)
+    results = {
+        'accuracy': accuracy,
+        'confusion_matrix': np.array([[TP, FP], [FN, TN]]),
+    }
+    return results
+
+            
+
+
+
+
+def test_LSTM(model, test_corpus, vocab, device):
+    model = model.to(device)
+    model.eval()
+    test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+    TP, FP, FN, TN = 0, 0, 0, 0
+    print('testing started')
+    for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
+        x = x.to(device)
+        y = y.to(device)
+        final_token_logits = model(x)[-1]
+        label = y[-1]
+        print(final_token_logits)
+        print(label)
+        if final_token_logits[vocab['[FAKE]'].idx] > final_token_logits[vocab['[REAL]'].idx]:
             pred = vocab['[FAKE]'].idx
         else:
             pred = vocab['[REAL]'].idx
-        if pred == y:
+        if pred == label:
             if pred == vocab['[REAL]'].idx:
                 TP += 1
             else:
@@ -514,16 +577,21 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
-    if model_type != "LSTM":
-        test_results = test_categorical(model=model,
+    if model_type == "LSTM":
+        test_results = test_LSTM(model=model,
                                     test_corpus=test_corpus,
-                                    window=window,
                                     vocab=vocab,
                                     device=device)
         plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
     else:
-        print("LSTM Test Unimplemented");
+        test_results = test_FFNN(model=model,
+                                    test_corpus=test_corpus,
+                                    train_corpus=train_corpus,
+                                    window=window,
+                                    vocab=vocab,
+                                    device=device)
+        plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
 if __name__ == '__main__':
