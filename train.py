@@ -47,6 +47,7 @@ class SequenceModel(nn.Module):
         def initialize(m: nn.Module):
             if isinstance(m, nn.Embedding):
                 nn.init.xavier_normal_(m.weight)
+            # initiate weights by xavier normal and set all bias to zero
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight)
                 if getattr(m, 'bias', None) is not None:
@@ -173,7 +174,7 @@ def encode(fnames: list,
     special_tok = ['<start_bio>', '<end_bio>', '[FAKE]', '[REAL]']
     tokens = []
 
-    # read all files as tokens
+    # read all files as tokens, cleaning up text data
     for fname in fnames:
         with open(fname, 'rt', encoding='utf8') as f:
             content = f.read()
@@ -249,11 +250,10 @@ def train_categorical(model: nn.Module,
                       path: str,
                       device: str):
     model = model.to(device)
-    print('training started')
+    print('---Training Started---')
     total_step = 0
-    best = float('inf')
-    train_perplexity_per_epoch = []
-    valid_perplexity_per_epoch = []
+    best_perplexity = float('inf')
+    train_perplexity_per_epoch, valid_perplexity_per_epoch = [], []
     for epoch in range(1, epochs + 1):
         train_loss = torch.tensor(0., device=device)
         t = time.time()
@@ -294,9 +294,9 @@ def train_categorical(model: nn.Module,
             valid_loss = float(valid_loss.cpu())
             valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
-            if valid_perplexity < best:
+            if valid_perplexity < best_perplexity:
                 save_model(model, path)
-                best = valid_perplexity
+                best_perplexity = valid_perplexity
 
             print(f'epoch {epoch}:',
                   f'loss {train_loss},',
@@ -554,9 +554,12 @@ def main():
                               pin_memory=True)
     print('validation dataset loaded with length', len(valid_dataset))
 
+    # loading saved params
     if load_path:
         model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth')))
         path = load_path
+
+    # training a new model
     else:
         path = os.path.join(model_type, f'{int(time.time())}')
         assert not os.path.exists(path)
@@ -573,6 +576,7 @@ def main():
                                     epochs=epochs,
                                     path=path,
                                     device=device)
+
         plot_learning_curve(results['train_perplexity'],
                             results['valid_perplexity'],
                             model_type,
