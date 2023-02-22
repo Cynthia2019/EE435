@@ -323,13 +323,14 @@ def compute_seq_prob(model, seq, window, vocab, device):
         log_prob += torch.log_softmax(y.squeeze(0), dim=0) 
     return log_prob
 
+
 def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     # fit a KNN to the training data
     # initialize two np array
     X = []
     y = []
+    train_corpus = [np.array(bio, dtype=np.int64) for bio in train_corpus]
     for seq in train_corpus:
-        print(seq)
         seq_prob = compute_seq_prob(model, seq, window, vocab, device)
         X.append(seq_prob.detach().numpy())
         y.append(seq[-1])
@@ -347,7 +348,9 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
         seq_prob = compute_seq_prob(model, seq, window, vocab, device)
         # get the label of the sequence
         label = seq[-1]
-        predicted_label = knn.predict(seq_prob)
+        # Todo: solve run time warning in distance calculation: 
+        # invalid value encountered in sqrt return np.sqrt(js / 2.0)
+        predicted_label = knn.predict(seq_prob.detach().numpy().reshape(1, -1))
         if predicted_label == vocab['[REAL]'].idx:
             if label == vocab['[REAL]'].idx:
                 TP += 1
