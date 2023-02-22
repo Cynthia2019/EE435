@@ -260,8 +260,6 @@ def train_categorical(model: nn.Module,
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
-            if i>0:
-                break
             total_step += 1
             y = y.to(device)
             optim.zero_grad(set_to_none=True)
@@ -284,8 +282,6 @@ def train_categorical(model: nn.Module,
 
             valid_loss = torch.tensor(0., device=device)
             for i, (x, y) in enumerate(valid_loader):
-                if i>0:
-                    break
                 y = y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
