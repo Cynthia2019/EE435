@@ -313,7 +313,7 @@ def train_categorical(model: nn.Module,
 
 def compute_seq_prob(model, seq, window, vocab, device):
     num_windows = len(seq) - window
-    # initalize a tensor of length vocab_size
+    # initialize a tensor of length vocab_size
     log_prob = torch.zeros(len(vocab), device=device)
     for i in range(num_windows):
         x = seq[i:i + window]
@@ -325,30 +325,57 @@ def compute_seq_prob(model, seq, window, vocab, device):
 def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     # fit a KNN to the training data
     # initialize two np array
-    X = []
-    y = []
+    X, y = [], []
+    real_label_idx, fake_label_idx = vocab['[REAL]'].idx, vocab['[FAKE]'].idx
+    
     train_corpus = [np.array(bio, dtype=np.int64) for bio in train_corpus]
+    print("The length of train_corpus is {}".format(len(train_corpus)))
+
+    true_label_count, false_label_count = 0, 0
+    label_count = 100
+    iterations = 0
     for seq in train_corpus:
-        seq_prob = compute_seq_prob(model, seq, window, vocab, device)
-        X.append(seq_prob.detach().numpy())
-        y.append(seq[-1])
+        iterations += 1
+        if iterations % 10 == 0:
+            print("Trained {} true labels and {} false labels".format(true_label_count, false_label_count))
+        append = False
+        if true_label_count > label_count and false_label_count > label_count: break
+        if seq[-1] == real_label_idx:
+            if true_label_count <= label_count: 
+                append = True  
+                true_label_count += 1
+        else:
+            if false_label_count <= label_count:
+                append = True
+                false_label_count += 1
+        if append:
+            seq_prob = compute_seq_prob(model, seq, window, vocab, device)
+            X.append(seq_prob.detach().cpu().numpy())
+            y.append(seq[-1])
+        
     X = np.array(X)
     y = np.array(y)
     knn = KNeighborsClassifier(n_neighbors=1, metric=jensenshannon)
     knn.fit(X, y)
     print('KNN fitted')
+
     # compute the log probability of each sequence in the test set
     model = model.to(device)
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
+
     TP, FP, FN, TN = 0, 0, 0, 0
+    iteration = 0
     for seq in test_data:
+        iteration += 1
+        if iteration % 10 == 0:
+            print("{} of {} iterations".format(iteration, len(test_data)))
         seq_prob = compute_seq_prob(model, seq, window, vocab, device)
         # get the label of the sequence
         label = seq[-1]
-        # Todo: solve run time warning in distance calculation: 
+        # TODO: solve run time warning in distance calculation: 
         # invalid value encountered in sqrt return np.sqrt(js / 2.0)
-        predicted_label = knn.predict(seq_prob.detach().numpy().reshape(1, -1))
+        predicted_label = knn.predict(seq_prob.detach().cpu().numpy().reshape(1, -1))
         if predicted_label == vocab['[REAL]'].idx:
             if label == vocab['[REAL]'].idx:
                 TP += 1
@@ -576,12 +603,13 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
+    
+    print('---Testing Model---')
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
                                  test_corpus=test_corpus,
                                  vocab=vocab,
                                  device=device)
-        plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
     else:
         test_results = test_FFNN(model=model,
@@ -590,7 +618,9 @@ def main():
                                  window=window,
                                  vocab=vocab,
                                  device=device)
-        plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
+    
+    print("The test accuracy is {}".format(test_results['accuracy']))
+    plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
 if __name__ == '__main__':
