@@ -468,7 +468,6 @@ def main():
                      drop_ratio=dropout,
                      device=device)
 
-        # todo: changing training code to accommodate LSTM
         train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
         valid_dataset = BioVariableLenDataset(valid_corpus, vocab_size)
     else:
