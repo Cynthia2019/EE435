@@ -257,39 +257,41 @@ def train_categorical(model: nn.Module,
     total_step = 0
     train_perplexity_per_epoch, valid_perplexity_per_epoch = [], []
     for epoch in range(1, epochs + 1):
-        train_loss = torch.tensor(0., device=device)
+        train_loss = 0.
         t = time.time()
         model.train()
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
+            batch_size = x[0].shape[0]
             total_step += 1
-            y = y.to(device)
             optim.zero_grad(set_to_none=True)
             pred = model(x)
+            y = y.to(device)
             loss = criterion(pred, y)
             loss.backward()
             nn.utils.clip_grad_value_(model.parameters(), clip)
             optim.step()
 
             with torch.inference_mode():
-                train_loss += loss.detach()
+                train_loss += loss.detach().cpu() * batch_size
         with torch.inference_mode():
             model.eval()
 
             # calculate perplexity for train and valid set
-            train_loss = float(train_loss.cpu())
-            train_loss /= len(train_loader)
+            train_loss = float(train_loss)
+            train_loss /= len(train_loader.dataset)
             train_perplexity = np.exp(train_loss)
             train_perplexity_per_epoch.append(train_perplexity)
 
-            valid_loss = torch.tensor(0., device=device)
+            valid_loss = 0.
             for i, (x, y) in enumerate(valid_loader):
+                batch_size = x[0].shape[0]
                 y = y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
-                valid_loss += loss
-            valid_loss /= len(valid_loader)
-            valid_loss = float(valid_loss.cpu())
+                valid_loss += loss.cpu() * batch_size
+            valid_loss = float(valid_loss)
+            valid_loss /= len(valid_loader.dataset)
             valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
 
@@ -321,6 +323,7 @@ def compute_seq_prob(model, seq, window, vocab, device):
     return log_prob
 
 
+@torch.inference_mode()
 def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     # fit a KNN to the training data
     # initialize two np array
@@ -433,14 +436,14 @@ def parse_arguments():
     parser.add_argument('--model_type', type=str, default='FFNN')
     parser.add_argument('--embedding_dim', type=int, default=128)
     parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--window', type=int, default=5)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--dropout', type=int, default=0.3)
     parser.add_argument('--clip', type=int, default=2.0)
     parser.add_argument('--load_path', type=str, default='')
-    parser.add_argument('--weight_decay', type=float, default=0.00002)
+    parser.add_argument('--weight_decay', type=float, default=0.000025)
 
     return parser.parse_args()
 
@@ -562,17 +565,13 @@ def main():
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
                               shuffle=True,
-                              collate_fn=train_dataset.collate,
-                              num_workers=4,
-                              pin_memory=True)
+                              collate_fn=train_dataset.collate)
     print('training dataset loaded with length', len(train_dataset))
 
     valid_loader = DataLoader(valid_dataset,
                               batch_size=batch_size,
                               shuffle=False,
-                              collate_fn=valid_dataset.collate,
-                              num_workers=2,
-                              pin_memory=True)
+                              collate_fn=valid_dataset.collate)
     print('validation dataset loaded with length', len(valid_dataset))
 
     # loading saved params
@@ -602,6 +601,8 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
+    with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
+        f.write(str(params))
 
     print('---Testing Model---')
     if model_type == "LSTM":
