@@ -80,9 +80,9 @@ class FFNN(SequenceModel):
         x = x.to(self.device)
         x = self.in_embedding(x)
         x = torch.flatten(x, 1)
+        x = self.dropout(x) if self.dropout else x
         x = self.linear(x)
         x = torch.tanh(x)
-        x = self.dropout(x) if self.dropout else x
         x = self.out_embedding(x)
         return x
 
@@ -255,7 +255,6 @@ def train_categorical(model: nn.Module,
     model = model.to(device)
     print('---Training Started---')
     total_step = 0
-    best_perplexity = float('inf')
     train_perplexity_per_epoch, valid_perplexity_per_epoch = [], []
     for epoch in range(1, epochs + 1):
         train_loss = torch.tensor(0., device=device)
@@ -293,9 +292,6 @@ def train_categorical(model: nn.Module,
             valid_loss = float(valid_loss.cpu())
             valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
-            if valid_perplexity < best_perplexity:
-                save_model(model, path)
-                best_perplexity = valid_perplexity
 
             print(f'epoch {epoch}:',
                   f'loss {train_loss},',
@@ -309,6 +305,7 @@ def train_categorical(model: nn.Module,
     }
     with open(os.path.join(path, 'train_results.pkl'), 'wb') as f:
         pickle.dump(results, f)
+    save_model(model, path)
 
     return results
 
@@ -329,7 +326,7 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     # initialize two np array
     X, y = [], []
     real_label_idx, fake_label_idx = vocab['[REAL]'].idx, vocab['[FAKE]'].idx
-    
+
     train_corpus = [np.array(bio, dtype=np.int64) for bio in train_corpus]
     print("The length of train_corpus is {}".format(len(train_corpus)))
 
@@ -343,8 +340,8 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
         append = False
         if true_label_count > label_count and false_label_count > label_count: break
         if seq[-1] == real_label_idx:
-            if true_label_count <= label_count: 
-                append = True  
+            if true_label_count <= label_count:
+                append = True
                 true_label_count += 1
         else:
             if false_label_count <= label_count:
@@ -354,7 +351,7 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
             seq_prob = compute_seq_prob(model, seq, window, vocab, device)
             X.append(seq_prob.detach().cpu().numpy())
             y.append(seq[-1])
-        
+
     X = np.array(X)
     y = np.array(y)
     knn = KNeighborsClassifier(n_neighbors=1, metric=jensenshannon)
@@ -396,6 +393,7 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     return results
 
 
+@torch.inference_mode()
 def test_LSTM(model, test_corpus, vocab, device):
     model = model.to(device)
     model.eval()
@@ -404,7 +402,6 @@ def test_LSTM(model, test_corpus, vocab, device):
     TP, FP, FN, TN = 0, 0, 0, 0
     print('testing started')
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
-        x = (x[0].to(device), x[1])
         y = y.to(device)
         final_token_logits = model(x)[-1]
         label = y[-1]
@@ -439,11 +436,11 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--window', type=int, default=5)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--dropout', type=int, default=0.2)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--dropout', type=int, default=0.3)
     parser.add_argument('--clip', type=int, default=2.0)
     parser.add_argument('--load_path', type=str, default='')
-    parser.add_argument('--weight_decay', type=float, default=0.00001)
+    parser.add_argument('--weight_decay', type=float, default=0.00002)
 
     return parser.parse_args()
 
@@ -605,7 +602,7 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
-    
+
     print('---Testing Model---')
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
@@ -620,7 +617,7 @@ def main():
                                  window=window,
                                  vocab=vocab,
                                  device=device)
-    
+
     print("The test accuracy is {}".format(test_results['accuracy']))
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
