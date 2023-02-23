@@ -403,8 +403,6 @@ def test_LSTM(model, test_corpus, vocab, device):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
     TP, FP, FN, TN = 0, 0, 0, 0
     print('testing started')
-    print(vocab['[FAKE]'].idx, vocab['[REAL]'].idx)
-    raise ValueError
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
         x = (x[0].to(device), x[1])
         y = y.to(device)
