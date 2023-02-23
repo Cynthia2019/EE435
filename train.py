@@ -444,8 +444,8 @@ def parse_arguments():
     parser.add_argument('--window', type=int, default=5)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--lr', type=float, default=5e-4)
-    parser.add_argument('--dropout', type=int, default=0.3)
-    parser.add_argument('--clip', type=int, default=2.0)
+    parser.add_argument('--dropout', type=float, default=0.3)
+    parser.add_argument('--clip', type=float, default=2.0)
     parser.add_argument('--load_path', type=str, default='')
     parser.add_argument('--weight_decay', type=float, default=0.000025)
 
@@ -605,8 +605,10 @@ def main():
                             results['valid_perplexity'],
                             model_type,
                             path)
-    with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
-        f.write(str(params))
+
+    if not load_path:
+        with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
+            f.write(str(params))
 
     print('---Testing Model---')
     if model_type == "LSTM":
