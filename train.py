@@ -260,38 +260,42 @@ def train_categorical(model: nn.Module,
         train_loss = 0.
         t = time.time()
         model.train()
+        total_predicted = 0
         for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
                                    total=len(train_loader)):
-            batch_size = x[0].shape[0]
             total_step += 1
             optim.zero_grad(set_to_none=True)
             pred = model(x)
             y = y.to(device)
             loss = criterion(pred, y)
+            temp = loss.detach()
+            loss = loss.mean()
             loss.backward()
             nn.utils.clip_grad_value_(model.parameters(), clip)
             optim.step()
 
             with torch.inference_mode():
-                train_loss += loss.detach().cpu() * batch_size
+                train_loss += temp.sum().cpu()
+                total_predicted += y.shape[0]
         with torch.inference_mode():
             model.eval()
 
             # calculate perplexity for train and valid set
             train_loss = float(train_loss)
-            train_loss /= len(train_loader.dataset)
+            train_loss /= total_predicted
             train_perplexity = np.exp(train_loss)
             train_perplexity_per_epoch.append(train_perplexity)
 
             valid_loss = 0.
+            total_predicted = 0
             for i, (x, y) in enumerate(valid_loader):
-                batch_size = x[0].shape[0]
                 y = y.to(device)
                 pred = model(x)
                 loss = criterion(pred, y)
-                valid_loss += loss.cpu() * batch_size
+                valid_loss += loss.sum().cpu()
+                total_predicted += y.shape[0]
             valid_loss = float(valid_loss)
-            valid_loss /= len(valid_loader.dataset)
+            valid_loss /= total_predicted
             valid_perplexity = np.exp(valid_loss)
             valid_perplexity_per_epoch.append(valid_perplexity)
 
@@ -560,7 +564,7 @@ def main():
     else:
         raise NotImplementedError("Neither FFNN nor LSTM")
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = nn.CrossEntropyLoss(reduction='none').to(device)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
