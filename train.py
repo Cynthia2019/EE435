@@ -3,6 +3,7 @@ import sys
 import time
 import tqdm
 import torch
+import random
 import pickle
 import argparse
 import numpy as np
@@ -212,12 +213,13 @@ def encode(fnames: list,
         flat_corpus = [token for seq in corpus for token in seq]
         counts = Counter(flat_corpus)
         counts = {k: v for k, v in counts.items() if v > count_threshold}
-        vocab = {k: Token(k, i, v)
-                 for i, (k, v) in enumerate(counts.items())}
+        orders = list(counts.keys())
+        orders.sort()
+        vocab = {k: Token(k, i, counts[k])
+                 for i, k in enumerate(orders)}
 
         unk_tok = Token('<unk>', len(vocab), 100)
         vocab[unk_tok.tok] = unk_tok
-
     # convert tokens to Token object
     for i, seq in enumerate(corpus):
         temp = []
@@ -401,6 +403,8 @@ def test_LSTM(model, test_corpus, vocab, device):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
     TP, FP, FN, TN = 0, 0, 0, 0
     print('testing started')
+    print(vocab['[FAKE]'].idx, vocab['[REAL]'].idx)
+    raise ValueError
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
         x = (x[0].to(device), x[1])
         y = y.to(device)
@@ -624,4 +628,7 @@ def main():
 
 
 if __name__ == '__main__':
+    np.random.seed(0)
+    random.seed(0)
+    torch.manual_seed(0)
     main()
