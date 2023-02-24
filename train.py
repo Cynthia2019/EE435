@@ -321,6 +321,19 @@ def train_categorical(model: nn.Module,
     return results
 
 
+def get_confusion_matrix(preds, labels, positive_idx):
+    preds, labels = np.array(preds, dtype=np.int64), np.array(labels, dtype=np.int64)
+    true = preds == labels
+    false = ~true
+    positive = preds == positive_idx
+    negative = ~positive
+    TP = (true & positive).sum()
+    FP = (false & positive).sum()
+    FN = (false & negative).sum()
+    TN = (true & negative).sum()
+    return np.array([[TP, FP], [FN, TN]])
+
+
 def compute_seq_prob(model, seq, window, vocab, device):
     num_windows = len(seq) - window
     # initialize a tensor of length vocab_size
@@ -437,37 +450,30 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
         test_dist.append(get_sequence_dist(bio))
     test_preds = knn.predict(np.array(test_dist)).flatten().astype(np.int64)
     test_labels = np.array(test_labels, dtype=np.int64)
+    pos_idx = vocab['[REAL]'].idx
+    conf_mat = get_confusion_matrix(test_preds, test_labels, pos_idx)
 
 
 @torch.inference_mode()
-def test_LSTM(model, test_corpus, vocab, device):
+def test_LSTM(model, test_corpus, vocab):
     model.eval()
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
-    TP, FP, FN, TN = 0, 0, 0, 0
+    preds, labels = [], []
+    real_idx = vocab['[REAL]'].idx
+    fake_idx = vocab['[FAKE]'].idx
     print('testing started')
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
-        y = y.to(device)
         final_token_logits = model(x)[-1]
-        label = y[-1]
-        if final_token_logits[vocab['[FAKE]'].idx] > final_token_logits[vocab['[REAL]'].idx]:
-            pred = vocab['[FAKE]'].idx
-        else:
-            pred = vocab['[REAL]'].idx
-        if pred == label:
-            if pred == vocab['[REAL]'].idx:
-                TP += 1
-            else:
-                TN += 1
-        else:
-            if pred == vocab['[REAL]'].idx:
-                FP += 1
-            else:
-                FN += 1
-    accuracy = (TP + TN) / (TP + FP + FN + TN)
+        pred = final_token_logits[fake_idx] > final_token_logits[real_idx]
+        pred = fake_idx if pred else real_idx
+        preds.append(pred)
+        labels.append(y[-1])
+    conf_matrix = get_confusion_matrix(preds, labels, real_idx)
+    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
     results = {
         'accuracy': accuracy,
-        'confusion_matrix': np.array([[TP, FP], [FN, TN]]),
+        'confusion_matrix': conf_matrix,
     }
     return results
 
@@ -656,8 +662,7 @@ def main():
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
                                  test_corpus=test_corpus,
-                                 vocab=vocab,
-                                 device=device)
+                                 vocab=vocab)
 
     else:
         test_results = test_FFNN(model=model,
