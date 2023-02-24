@@ -432,6 +432,19 @@ def torch_js(p, q):  # js divergence
 
 @torch.inference_mode()
 def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
+    """
+    test FFNN by using KNN as classifier.
+
+    steps:
+    1. for each bio in training and test set, do:
+        1) get the probability distribution over vocab
+            for each window of the sequence using FFNN
+        2) compute the average of all probability distributions from the same sequence
+        3) normalize the averaged probability distribution
+    2. for each probability distribution in test set, do:
+        use JS divergence as metric, classify using K nearest neighbors
+    3. compute confusion matrix and accuracy
+    """
     model.eval()
 
     def get_sequence_dist(bio_seq):
@@ -482,6 +495,84 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
 
 
 @torch.inference_mode()
+def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, device):
+    """
+    classify FFNN using chain rule as described during lecture
+
+    However, instead of manually estimating the intersection from histogram plot,
+    we compute the approximate intersection by looking for overlap of two histograms
+    """
+    model.eval()
+
+    def get_sequence_prob(bio_seq):
+        batch = [bio_seq[i:i + window] for i in range(len(bio_seq) - window)]
+        indices = bio_seq[window:]
+        assert len(batch) == len(indices)
+        batch = np.array(batch, dtype=np.int64)
+        batch = torch.as_tensor(batch, device=device)
+        pred = model(batch)
+        pred = -torch.log_softmax(pred, dim=1)
+        return pred[np.arange(len(pred)), indices].mean().cpu().numpy()
+
+    seq_probs = {'[REAL]': [], '[FAKE]': []}
+    for bio in train_corpus:
+        label = bio[-1].tok
+        bio = np.array(bio, dtype=np.int64)
+        seq_probs[label].append(get_sequence_prob(bio))
+    for k in seq_probs.keys():
+        seq_probs[k] = np.array(seq_probs[k])
+
+    print('finding intersection')
+    lowest = min(np.min(seq_probs['[REAL]']), np.min(seq_probs['[FAKE]']))
+    highest = max(np.max(seq_probs['[REAL]']), np.max(seq_probs['[FAKE]']))
+    bin_range = (lowest - 1e-6, highest + 1e-6)
+    real_hist, bins = np.histogram(seq_probs['[REAL]'], 160, range=bin_range)
+    fake_hist, _ = np.histogram(seq_probs['[FAKE]'], bins)
+    overlap_hist = np.minimum(real_hist, fake_hist)
+    real_median = np.median(seq_probs['[REAL]'])
+    intersect_range = [real_median,
+                       np.median(seq_probs['[FAKE]'])]
+    lower, upper = sorted(intersect_range)
+    lower = np.argwhere(bins >= lower)[0, 0]
+    upper = np.argwhere(bins >= upper)[0, 0]
+    mask = np.ones_like(overlap_hist)
+    mask = mask.astype(bool)
+    mask[lower:upper] = False
+    overlap_hist = np.ma.masked_array(overlap_hist, mask)
+    intersection = np.argmax(overlap_hist)
+    bins_center = (bins[1:] + bins[:-1]) / 2.
+    intersection = bins_center[intersection]
+    print('estimated decision boundary is', intersection)
+    plt.plot(bins_center, real_hist, c='b', label='Real')
+    plt.plot(bins_center, fake_hist, c='r', label='Fake')
+    plt.axvline(x=intersection, color='k', label='Decision Boundary')
+    plt.xlabel('-Avg. Log Prob')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.savefig(os.path.join(path, 'histogram_plot_FFNN.png'))
+
+    real_idx = vocab['[REAL]'].idx
+    fake_idx = vocab['[FAKE]'].idx
+    test_preds, test_labels = [], []
+    for bio in test_corpus:
+        test_labels.append(bio[-1].idx)
+        bio = np.array(bio, dtype=np.int64)
+        seq_prob = get_sequence_prob(bio)
+        if (real_median < intersection) == (seq_prob < intersection):
+            test_preds.append(real_idx)
+        else:
+            test_preds.append(fake_idx)
+
+    conf_matrix = get_confusion_matrix(test_preds, test_labels, real_idx)
+    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+    results = {
+        'accuracy': accuracy,
+        'confusion_matrix': conf_matrix,
+    }
+    return results
+
+
+@torch.inference_mode()
 def test_LSTM(model, test_corpus, vocab):
     model.eval()
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
@@ -505,24 +596,6 @@ def test_LSTM(model, test_corpus, vocab):
         'confusion_matrix': conf_matrix,
     }
     return results
-
-
-def parse_arguments():
-    parser = argparse.ArgumentParser()
-    # todo: add more arguments
-    parser.add_argument('--model_type', type=str, default='FFNN')
-    parser.add_argument('--embedding_dim', type=int, default=512)
-    parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--window', type=int, default=5)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=5e-4)
-    parser.add_argument('--dropout', type=float, default=0.3)
-    parser.add_argument('--clip', type=float, default=2.0)
-    parser.add_argument('--load_path', type=str, default='')
-    parser.add_argument('--weight_decay', type=float, default=0.000025)
-
-    return parser.parse_args()
 
 
 def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
@@ -575,11 +648,30 @@ def seed_all(device):
     torch.use_deterministic_algorithms(True, warn_only=True)
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_type', type=str, default='FFNN', choices=['FFNN', 'LSTM'])
+    parser.add_argument('--embedding_dim', type=int, default=512)
+    parser.add_argument('--num_layers', type=int, default=2)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--window', type=int, default=5)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--dropout', type=float, default=0.3)
+    parser.add_argument('--clip', type=float, default=2.0)
+    parser.add_argument('--load_path', type=str, default='')
+    parser.add_argument('--weight_decay', type=float, default=0.000025)
+    parser.add_argument('--classifier', type=str, default='KNN', choices=['KNN', 'chain'])
+
+    return parser.parse_args()
+
+
 def main():
     # device detection
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     seed_all(device)
     params = parse_arguments()
+    print(params)
 
     (
         model_type,
@@ -592,7 +684,8 @@ def main():
         dropout,
         clip,
         load_path,
-        weight_decay
+        weight_decay,
+        classifier
     ) = (
         params.model_type,
         params.embedding_dim,
@@ -604,7 +697,8 @@ def main():
         params.dropout,
         params.clip,
         params.load_path,
-        params.weight_decay
+        params.weight_decay,
+        params.classifier
     )
 
     # read tokens, init sequences, dataset, and loader
@@ -709,12 +803,23 @@ def main():
                                  vocab=vocab)
 
     else:
-        test_results = test_FFNN_KNN(model=model,
-                                     test_corpus=test_corpus,
-                                     train_corpus=train_corpus,
-                                     window=window,
-                                     vocab=vocab,
-                                     device=device)
+        if classifier == 'KNN':
+            test_results = test_FFNN_KNN(model=model,
+                                         test_corpus=test_corpus,
+                                         train_corpus=train_corpus,
+                                         window=window,
+                                         vocab=vocab,
+                                         device=device)
+        elif classifier == 'chain':
+            test_results = test_FFNN_chain(model=model,
+                                           test_corpus=test_corpus,
+                                           train_corpus=train_corpus,
+                                           window=window,
+                                           vocab=vocab,
+                                           path=path,
+                                           device=device)
+        else:
+            raise NotImplementedError
 
     print(f'The test accuracy is {test_results["accuracy"]}, time {time.time() - t}')
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
