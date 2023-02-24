@@ -416,7 +416,7 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     return results
 
 
-def cuda_js(p, q):
+def torch_js(p, q):
     def kl_div(a, b):
         result = a * (a / b).log_()
         return result.nansum(dim=1)
@@ -471,7 +471,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
     test_dist = torch.as_tensor(test_dist, device=device)
     test_preds = []
     for prob_distribution in tqdm.tqdm(test_dist):
-        distance_vec = cuda_js(prob_distribution.unsqueeze(0), train_dist)
+        distance_vec = torch_js(prob_distribution.unsqueeze(0), train_dist)
         topk = torch.topk(distance_vec, k=32, sorted=False, largest=False).indices
         nearest = train_labels[topk]
         pred_label = torch.mode(nearest).values.cpu().numpy()
@@ -721,7 +721,7 @@ def main():
                                      vocab=vocab,
                                      device=device)
 
-    print(f'The test accuracy is {test_results["accuracy"]}, time taken {time.time() - t}')
+    print(f'The test accuracy is {test_results["accuracy"]}, time {time.time() - t}')
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
