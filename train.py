@@ -1,8 +1,12 @@
 import os
-import sys
+
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['PYTHONHASHSEED'] = '1'
+
 import time
-import tqdm
 import torch
+import tqdm
 import random
 import pickle
 import argparse
@@ -212,7 +216,7 @@ def encode(fnames: list,
         corpus[-1].append(token)
 
     # deduplicate
-    corpus = list(set(tuple(seq) for seq in corpus))
+    corpus = [seq for i, seq in enumerate(corpus) if seq not in corpus[:i]]
 
     # count and create vocab
     if vocab is None:
@@ -458,12 +462,14 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
 def test_LSTM(model, test_corpus, vocab):
     model.eval()
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False,
+                             collate_fn=test_dataset.collate)
     preds, labels = [], []
     real_idx = vocab['[REAL]'].idx
     fake_idx = vocab['[FAKE]'].idx
     print('testing started')
-    for i, (x, y) in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
+    for i, (x, y) in tqdm.tqdm(enumerate(test_loader),
+                               total=len(test_loader)):
         final_token_logits = model(x)[-1]
         pred = final_token_logits[fake_idx] > final_token_logits[real_idx]
         pred = fake_idx if pred else real_idx
@@ -529,7 +535,20 @@ def plot_confusion_matrix(confusion_matrix: np.ndarray, model_type: str, path: s
     plt.savefig(os.path.join(path, f'confusion_matrix_{model_type}.png'))
 
 
+def seed_all():
+    random.seed(1)
+    np.random.seed(1)
+    torch.manual_seed(1)
+    torch.cuda.manual_seed(1)
+    torch.cuda.manual_seed_all(1)
+    torch.set_deterministic_debug_mode('warn')
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
 def main():
+    seed_all()
     params = parse_arguments()
 
     (
@@ -559,10 +578,7 @@ def main():
     )
 
     # device detection
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print('using device', device)
-    if device != 'cuda':
-        print('WARNING: cuda not detected', file=sys.stderr)
+    device = 'cuda'
 
     # read tokens, init sequences, dataset, and loader
     vocab, train_corpus = encode(['./mix.train.tok'],
@@ -677,7 +693,4 @@ def main():
 
 
 if __name__ == '__main__':
-    np.random.seed(0)
-    random.seed(0)
-    torch.manual_seed(0)
     main()
