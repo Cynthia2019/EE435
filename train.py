@@ -25,6 +25,12 @@ class Token:
         self.idx = idx
         self.count = count
 
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.tok == other.tok and self.idx == other.idx and self.count == other.count
+        else:
+            return self.tok == other
+
     def __int__(self):
         return self.idx
 
@@ -252,7 +258,6 @@ def train_categorical(model: nn.Module,
                       epochs: int,
                       path: str,
                       device: str):
-    model = model.to(device)
     print('---Training Started---')
     total_step = 0
     train_perplexity_per_epoch, valid_perplexity_per_epoch = [], []
@@ -366,7 +371,6 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     print('KNN fitted')
 
     # compute the log probability of each sequence in the test set
-    model = model.to(device)
     model.eval()
     test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
 
@@ -401,8 +405,42 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
 
 
 @torch.inference_mode()
+def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
+    model.eval()
+
+    def get_sequence_dist(bio_seq):
+        batch = [bio_seq[i:i + window] for i in range(len(bio_seq) - window)]
+        batch = np.array(batch, dtype=np.int64)
+        batch = torch.as_tensor(batch, device=device)
+        pred = model(batch)
+        pred = torch.softmax(pred, dim=1)
+        avg_pred = pred.mean(dim=0)
+        avg_pred /= avg_pred.max()  # normalize
+        return avg_pred.cpu().numpy()
+
+    dist, labels = [], []
+    counts = {'[REAL]': 5000, '[FAKE]': 5000}
+    for bio in train_corpus:
+        counts[bio[-1].tok] -= 1
+        if counts[bio[-1].tok] < 0:
+            continue
+        labels.append(bio[-1].idx)
+        bio = np.array(bio, dtype=np.int64)
+        dist.append(get_sequence_dist(bio))
+
+    knn = KNeighborsClassifier(n_neighbors=51, metric_params=jensenshannon, n_jobs=-1)
+    knn.fit(np.array(dist, dtype=np.float32), np.array(labels, dtype=np.int64))
+    test_dist, test_labels = [], []
+    for bio in test_corpus:
+        test_labels.append(bio[-1].idx)
+        bio = np.array(bio, dtype=np.int64)
+        test_dist.append(get_sequence_dist(bio))
+    test_preds = knn.predict(np.array(test_dist)).flatten().astype(np.int64)
+    test_labels = np.array(test_labels, dtype=np.int64)
+
+
+@torch.inference_mode()
 def test_LSTM(model, test_corpus, vocab, device):
-    model = model.to(device)
     model.eval()
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=test_dataset.collate)
@@ -461,7 +499,7 @@ def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
     plt.ylabel('Perplexity')
     plt.legend()
     plt.savefig(os.path.join(path, f'perplexity_plot_{model_type}.png'))
-    plt.show()
+    # plt.show()
 
 
 def plot_confusion_matrix(confusion_matrix: np.ndarray, model_type: str, path: str):
@@ -550,8 +588,9 @@ def main():
                      drop_ratio=dropout,
                      device=device)
 
-        train_dataset = BioFixedLenDataset(train_corpus, window)
-        valid_dataset = BioFixedLenDataset(valid_corpus, window)
+        if not load_path:
+            train_dataset = BioFixedLenDataset(train_corpus, window)
+            valid_dataset = BioFixedLenDataset(valid_corpus, window)
     elif model_type == "LSTM":
         model = LSTM(num_embeddings=vocab_size,
                      embedding_dim=embedding_dim,
@@ -559,32 +598,35 @@ def main():
                      drop_ratio=dropout,
                      device=device)
 
-        train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
-        valid_dataset = BioVariableLenDataset(valid_corpus, vocab_size)
+        if not load_path:
+            train_dataset = BioVariableLenDataset(train_corpus, vocab_size)
+            valid_dataset = BioVariableLenDataset(valid_corpus, vocab_size)
     else:
         raise NotImplementedError("Neither FFNN nor LSTM")
 
     criterion = nn.CrossEntropyLoss(reduction='none').to(device)
-
-    train_loader = DataLoader(train_dataset,
-                              batch_size=batch_size,
-                              shuffle=True,
-                              collate_fn=train_dataset.collate)
-    print('training dataset loaded with length', len(train_dataset))
-
-    valid_loader = DataLoader(valid_dataset,
-                              batch_size=batch_size,
-                              shuffle=False,
-                              collate_fn=valid_dataset.collate)
-    print('validation dataset loaded with length', len(valid_dataset))
+    model = model.to(device)
+    if device == 'cuda':
+        torch.cuda.synchronize()
 
     # loading saved params
     if load_path:
+        print(f'loaded from {load_path}')
         model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth')))
         path = load_path
 
     # training a new model
     else:
+        train_loader = DataLoader(train_dataset,
+                                  batch_size=batch_size,
+                                  shuffle=True,
+                                  collate_fn=train_dataset.collate)
+        print('training dataset loaded with length', len(train_dataset))
+        valid_loader = DataLoader(valid_dataset,
+                                  batch_size=batch_size,
+                                  shuffle=False,
+                                  collate_fn=valid_dataset.collate)
+        print('validation dataset loaded with length', len(valid_dataset))
         path = os.path.join(model_type, f'{int(time.time())}')
         assert not os.path.exists(path)
         os.makedirs(path)
