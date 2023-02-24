@@ -13,7 +13,7 @@ from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
 from sklearn.neighbors import KNeighborsClassifier
-from scipy.spatial.distance import jensenshannon
+from scipy.spatial.distance import jensenshannon, pdist, cdist
 
 
 class Token:
@@ -416,6 +416,18 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     return results
 
 
+def cuda_js(p, q):
+    def kl_div(a, b):
+        result = a * (a / b).log_()
+        return result.nansum(dim=1)
+
+    m = p + q
+    m *= 0.5
+    out = kl_div(p, m) + kl_div(q, m)
+    out *= 0.5
+    return out.sqrt_()
+
+
 @torch.inference_mode()
 def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
     model.eval()
@@ -430,24 +442,40 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
         avg_pred /= avg_pred.max()  # normalize
         return avg_pred.cpu().numpy()
 
-    dist, labels = [], []
-    counts = {'[REAL]': 5000, '[FAKE]': 5000}
+    train_dist, train_labels = [], []
+    counts = {'[REAL]': 1000, '[FAKE]': 1000}
+    train_corpus = train_corpus[:]
+    random.shuffle(train_corpus)
+    # sample random 1000 real and 1000 fake bios
     for bio in train_corpus:
         counts[bio[-1].tok] -= 1
         if counts[bio[-1].tok] < 0:
             continue
-        labels.append(bio[-1].idx)
+        train_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
-        dist.append(get_sequence_dist(bio))
+        train_dist.append(get_sequence_dist(bio))
 
-    knn = KNeighborsClassifier(n_neighbors=51, metric_params=jensenshannon, n_jobs=-1)
-    knn.fit(np.array(dist, dtype=np.float32), np.array(labels, dtype=np.int64))
+    train_dist = np.array(train_dist, dtype=np.float32)
+    train_labels = np.array(train_labels, dtype=np.int64)
+    train_dist = torch.as_tensor(train_dist, device=device)
+    train_labels = torch.as_tensor(train_labels, device=device)
+
     test_dist, test_labels = [], []
     for bio in test_corpus:
         test_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
         test_dist.append(get_sequence_dist(bio))
-    test_preds = knn.predict(np.array(test_dist)).flatten()
+
+    print('starting KNN prediction')
+    test_dist = np.array(test_dist, dtype=np.float32)
+    test_dist = torch.as_tensor(test_dist, device=device)
+    test_preds = []
+    for prob_distribution in tqdm.tqdm(test_dist):
+        distance_vec = cuda_js(prob_distribution.unsqueeze(0), train_dist)
+        topk = torch.topk(distance_vec, k=32, sorted=False, largest=False).indices
+        nearest = train_labels[topk]
+        pred_label = torch.mode(nearest).values.cpu().numpy()
+        test_preds.append(pred_label)
     pos_idx = vocab['[REAL]'].idx
     conf_matrix = get_confusion_matrix(test_preds, test_labels, pos_idx)
     accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
@@ -679,20 +707,21 @@ def main():
             f.write(str(params))
 
     print('---Testing Model---')
+    t = time.time()
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
                                  test_corpus=test_corpus,
                                  vocab=vocab)
 
     else:
-        test_results = test_FFNN(model=model,
-                                 test_corpus=test_corpus,
-                                 train_corpus=train_corpus,
-                                 window=window,
-                                 vocab=vocab,
-                                 device=device)
+        test_results = test_FFNN_KNN(model=model,
+                                     test_corpus=test_corpus,
+                                     train_corpus=train_corpus,
+                                     window=window,
+                                     vocab=vocab,
+                                     device=device)
 
-    print("The test accuracy is {}".format(test_results['accuracy']))
+    print(f'The test accuracy is {test_results["accuracy"]}, time taken {time.time() - t}')
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
