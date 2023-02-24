@@ -416,8 +416,8 @@ def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
     return results
 
 
-def torch_js(p, q):
-    def kl_div(a, b):
+def torch_js(p, q):  # js divergence
+    def kl_div(a, b):  # kl divergence
         result = a * (a / b).log_()
         return result.nansum(dim=1)
 
@@ -516,7 +516,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     # todo: add more arguments
     parser.add_argument('--model_type', type=str, default='FFNN')
-    parser.add_argument('--embedding_dim', type=int, default=128)
+    parser.add_argument('--embedding_dim', type=int, default=512)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--window', type=int, default=5)
