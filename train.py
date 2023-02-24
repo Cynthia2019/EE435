@@ -76,7 +76,8 @@ class FFNN(SequenceModel):
 
         window *= embedding_dim
         self.linear = nn.Linear(window, embedding_dim)
-        self.dropout = nn.Dropout(drop_ratio) if drop_ratio else None
+        self.dropout1 = nn.Dropout(drop_ratio) if drop_ratio else None
+        self.dropout2 = nn.Dropout(drop_ratio) if drop_ratio else None
 
         self.init_params()
         self.out_embedding.weight = self.in_embedding.weight
@@ -85,9 +86,10 @@ class FFNN(SequenceModel):
         x = x.to(self.device)
         x = self.in_embedding(x)
         x = torch.flatten(x, 1)
-        x = self.dropout(x) if self.dropout else x
+        x = self.dropout1(x) if self.dropout1 else x
         x = self.linear(x)
         x = torch.tanh(x)
+        x = self.dropout2(x) if self.dropout2 else x
         x = self.out_embedding(x)
         return x
 
@@ -443,14 +445,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
         return avg_pred.cpu().numpy()
 
     train_dist, train_labels = [], []
-    counts = {'[REAL]': 1000, '[FAKE]': 1000}
-    train_corpus = train_corpus[:]
-    random.shuffle(train_corpus)
-    # sample random 1000 real and 1000 fake bios
     for bio in train_corpus:
-        counts[bio[-1].tok] -= 1
-        if counts[bio[-1].tok] < 0:
-            continue
         train_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
         train_dist.append(get_sequence_dist(bio))
@@ -472,7 +467,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
     test_preds = []
     for prob_distribution in tqdm.tqdm(test_dist):
         distance_vec = torch_js(prob_distribution.unsqueeze(0), train_dist)
-        topk = torch.topk(distance_vec, k=32, sorted=False, largest=False).indices
+        topk = torch.topk(distance_vec, k=51, sorted=False, largest=False).indices
         nearest = train_labels[topk]
         pred_label = torch.mode(nearest).values.cpu().numpy()
         test_preds.append(pred_label)
