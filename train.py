@@ -1,9 +1,4 @@
 import os
-
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8'
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-os.environ['PYTHONHASHSEED'] = '1'
-
 import time
 import torch
 import tqdm
@@ -452,10 +447,15 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
         test_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
         test_dist.append(get_sequence_dist(bio))
-    test_preds = knn.predict(np.array(test_dist)).flatten().astype(np.int64)
-    test_labels = np.array(test_labels, dtype=np.int64)
+    test_preds = knn.predict(np.array(test_dist)).flatten()
     pos_idx = vocab['[REAL]'].idx
-    conf_mat = get_confusion_matrix(test_preds, test_labels, pos_idx)
+    conf_matrix = get_confusion_matrix(test_preds, test_labels, pos_idx)
+    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+    results = {
+        'accuracy': accuracy,
+        'confusion_matrix': conf_matrix,
+    }
+    return results
 
 
 @torch.inference_mode()
@@ -535,20 +535,27 @@ def plot_confusion_matrix(confusion_matrix: np.ndarray, model_type: str, path: s
     plt.savefig(os.path.join(path, f'confusion_matrix_{model_type}.png'))
 
 
-def seed_all():
+def seed_all(device):
+    if device == 'cuda':
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    os.environ['PYTHONHASHSEED'] = '1'
     random.seed(1)
     np.random.seed(1)
     torch.manual_seed(1)
-    torch.cuda.manual_seed(1)
-    torch.cuda.manual_seed_all(1)
+    if device == 'cuda':
+        from torch.backends import cudnn
+        torch.cuda.manual_seed(1)
+        torch.cuda.manual_seed_all(1)
+        cudnn.benchmark = False
+        cudnn.deterministic = True
     torch.set_deterministic_debug_mode('warn')
     torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
 
 
 def main():
-    seed_all()
+    # device detection
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    seed_all(device)
     params = parse_arguments()
 
     (
@@ -576,9 +583,6 @@ def main():
         params.load_path,
         params.weight_decay
     )
-
-    # device detection
-    device = 'cuda'
 
     # read tokens, init sequences, dataset, and loader
     vocab, train_corpus = encode(['./mix.train.tok'],
