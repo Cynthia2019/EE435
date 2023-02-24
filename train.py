@@ -431,7 +431,7 @@ def torch_js(p, q):  # js divergence
 
 
 @torch.inference_mode()
-def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
+def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, device):
     """
     test FFNN by using KNN as classifier.
 
@@ -446,40 +446,58 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
     3. compute confusion matrix and accuracy
     """
     model.eval()
+    criterion = nn.CrossEntropyLoss(reduction='sum').to(device)
 
     def get_sequence_dist(bio_seq):
         batch = [bio_seq[i:i + window] for i in range(len(bio_seq) - window)]
+        target = bio_seq[window:]
         batch = np.array(batch, dtype=np.int64)
         batch = torch.as_tensor(batch, device=device)
+        target = torch.as_tensor(target, device=device)
         pred = model(batch)
-        pred = torch.softmax(pred, dim=1)
-        avg_pred = pred.mean(dim=0)
+        batch_loss = criterion(pred, target)
+        pred_probs = torch.softmax(pred, dim=1)
+        avg_pred = pred_probs.mean(dim=0)
         avg_pred /= avg_pred.max()  # normalize
-        return avg_pred.cpu().numpy()
+        return avg_pred.cpu().numpy(), batch_loss, len(target)
 
     train_dist, train_labels = [], []
     for bio in train_corpus:
         train_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
-        train_dist.append(get_sequence_dist(bio))
+        train_dist.append(get_sequence_dist(bio)[0])
 
     train_dist = np.array(train_dist, dtype=np.float32)
     train_labels = np.array(train_labels, dtype=np.int64)
     train_dist = torch.as_tensor(train_dist, device=device)
     train_labels = torch.as_tensor(train_labels, device=device)
 
+    total_loss, total_predicted = 0., 0
     test_dist, test_labels = [], []
     for bio in test_corpus:
         test_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
-        test_dist.append(get_sequence_dist(bio))
+        distribution, loss, count = get_sequence_dist(bio)
+        test_dist.append(distribution)
+        total_loss += loss
+        total_predicted += count
+    total_loss /= total_predicted
+    perplexity = torch.exp(total_loss).cpu().numpy()
 
     print('starting KNN prediction')
+    if metric == 'l2':
+        metric = lambda x, y: torch.linalg.norm(x - y, dim=1)
+    elif metric == 'l1':
+        metric = lambda x, y: torch.linalg.norm(x - y, ord=1, dim=1)
+    elif metric == 'js':
+        metric = torch_js
+    else:
+        raise NotImplementedError(metric)
     test_dist = np.array(test_dist, dtype=np.float32)
     test_dist = torch.as_tensor(test_dist, device=device)
     test_preds = []
     for prob_distribution in tqdm.tqdm(test_dist):
-        distance_vec = torch_js(prob_distribution.unsqueeze(0), train_dist)
+        distance_vec = metric(prob_distribution.unsqueeze(0), train_dist)
         topk = torch.topk(distance_vec, k=51, sorted=False, largest=False).indices
         nearest = train_labels[topk]
         pred_label = torch.mode(nearest).values.cpu().numpy()
@@ -490,6 +508,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, device):
     results = {
         'accuracy': accuracy,
         'confusion_matrix': conf_matrix,
+        'test_perplexity': perplexity
     }
     return results
 
@@ -503,22 +522,24 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     we compute the approximate intersection by looking for overlap of two histograms
     """
     model.eval()
+    criterion = nn.CrossEntropyLoss(reduction='sum').to(device)
 
     def get_sequence_prob(bio_seq):
         batch = [bio_seq[i:i + window] for i in range(len(bio_seq) - window)]
-        indices = bio_seq[window:]
-        assert len(batch) == len(indices)
+        target = bio_seq[window:]
+        target = torch.as_tensor(target, device=device)
+        assert len(batch) == len(target)
         batch = np.array(batch, dtype=np.int64)
         batch = torch.as_tensor(batch, device=device)
         pred = model(batch)
-        pred = -torch.log_softmax(pred, dim=1)
-        return pred[np.arange(len(pred)), indices].mean().cpu().numpy()
+        batch_loss = criterion(pred, target)
+        return (batch_loss / len(target)).cpu().numpy(), batch_loss, len(target)
 
     seq_probs = {'[REAL]': [], '[FAKE]': []}
     for bio in train_corpus:
         label = bio[-1].tok
         bio = np.array(bio, dtype=np.int64)
-        seq_probs[label].append(get_sequence_prob(bio))
+        seq_probs[label].append(get_sequence_prob(bio)[0])
     for k in seq_probs.keys():
         seq_probs[k] = np.array(seq_probs[k])
 
@@ -553,28 +574,36 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
 
     real_idx = vocab['[REAL]'].idx
     fake_idx = vocab['[FAKE]'].idx
+    total_loss, total_predicted = 0., 0
     test_preds, test_labels = [], []
     for bio in test_corpus:
         test_labels.append(bio[-1].idx)
         bio = np.array(bio, dtype=np.int64)
-        seq_prob = get_sequence_prob(bio)
+        seq_prob, loss, count = get_sequence_prob(bio)
+        total_loss += loss
+        total_predicted += count
+
         if (real_median < intersection) == (seq_prob < intersection):
             test_preds.append(real_idx)
         else:
             test_preds.append(fake_idx)
+    total_loss /= total_predicted
+    perplexity = torch.exp(total_loss).cpu().numpy()
 
     conf_matrix = get_confusion_matrix(test_preds, test_labels, real_idx)
     accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
     results = {
         'accuracy': accuracy,
         'confusion_matrix': conf_matrix,
+        'test_perplexity': perplexity
     }
     return results
 
 
 @torch.inference_mode()
-def test_LSTM(model, test_corpus, vocab):
+def test_LSTM(model, test_corpus, vocab, device):
     model.eval()
+    criterion = nn.CrossEntropyLoss(reduction='sum').to(device)
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False,
                              collate_fn=test_dataset.collate)
@@ -582,18 +611,26 @@ def test_LSTM(model, test_corpus, vocab):
     real_idx = vocab['[REAL]'].idx
     fake_idx = vocab['[FAKE]'].idx
     print('testing started')
+    total_loss, total_predicted = 0., 0
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader),
                                total=len(test_loader)):
-        final_token_logits = model(x)[-1]
+        total_predicted += len(y)
+        pred = model(x)
+        total_loss += criterion(pred, y.to(device))
+        final_token_logits = pred[-1]
         pred = final_token_logits[fake_idx] > final_token_logits[real_idx]
         pred = fake_idx if pred else real_idx
         preds.append(pred)
         labels.append(y[-1])
+    total_loss /= total_predicted
+    perplexity = torch.exp(total_loss).cpu().numpy()
+
     conf_matrix = get_confusion_matrix(preds, labels, real_idx)
     accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
     results = {
         'accuracy': accuracy,
         'confusion_matrix': conf_matrix,
+        'test_perplexity': perplexity
     }
     return results
 
@@ -661,7 +698,8 @@ def parse_arguments():
     parser.add_argument('--clip', type=float, default=2.0)
     parser.add_argument('--load_path', type=str, default='')
     parser.add_argument('--weight_decay', type=float, default=0.000025)
-    parser.add_argument('--classifier', type=str, default='KNN', choices=['KNN', 'chain'])
+    parser.add_argument('--classifier', type=str, default='KNN_js',
+                        choices=['KNN_l1', 'KNN_l2', 'KNN_js', 'chain'])
 
     return parser.parse_args()
 
@@ -800,15 +838,17 @@ def main():
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
                                  test_corpus=test_corpus,
-                                 vocab=vocab)
+                                 vocab=vocab,
+                                 device=device)
 
     else:
-        if classifier == 'KNN':
+        if 'KNN' in classifier:
             test_results = test_FFNN_KNN(model=model,
                                          test_corpus=test_corpus,
                                          train_corpus=train_corpus,
                                          window=window,
                                          vocab=vocab,
+                                         metric=classifier[4:],
                                          device=device)
         elif classifier == 'chain':
             test_results = test_FFNN_chain(model=model,
@@ -821,7 +861,9 @@ def main():
         else:
             raise NotImplementedError
 
-    print(f'The test accuracy is {test_results["accuracy"]}, time {time.time() - t}')
+    print(f'test accuracy {test_results["accuracy"]},'
+          f'test perplexity {test_results["test_perplexity"]},'
+          f'time {time.time() - t}')
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
