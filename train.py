@@ -670,6 +670,17 @@ def seed_all(device):
     torch.use_deterministic_algorithms(True, warn_only=True)
 
 
+def save_pred(predictions, vocab, path):
+    vocab = list(vocab.values())
+    predictions = [vocab[pred].tok for pred in predictions]
+    for pred in predictions:
+        assert pred in ['[REAL]', '[FAKE]']
+
+    with open(os.path.join(path, 'blind_predictions.csv'),
+              'w+', encoding='utf8') as f:
+        f.write(','.join(predictions))
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, default='FFNN', choices=['FFNN', 'LSTM'])
@@ -887,7 +898,7 @@ def main():
           f'test perplexity {test_results["test_perplexity"]},',
           f'blind test perplexity {blind_results["test_perplexity"]},',
           f'time {time.time() - t}')
-
+    save_pred(blind_results['test_predictions'], vocab, path)
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
