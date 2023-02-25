@@ -515,8 +515,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
         accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
         results = {
             'accuracy': accuracy,
-            'confusion_matrix': conf_matrix,
-            'test_perplexity': perplexity
+            'confusion_matrix': conf_matrix
         }
     results['test_perplexity'] = perplexity
     results['test_predictions'] = test_preds
@@ -610,7 +609,6 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
         results = {
             'accuracy': accuracy,
             'confusion_matrix': conf_matrix,
-            'test_perplexity': perplexity
         }
     results['test_perplexity'] = perplexity
     results['test_predictions'] = test_preds
@@ -653,10 +651,54 @@ def test_LSTM(model, test_corpus, vocab, device):
         results = {
             'accuracy': accuracy,
             'confusion_matrix': conf_matrix,
-            'test_perplexity': perplexity
         }
     results['test_perplexity'] = perplexity
     results['test_predictions'] = preds
+    return results
+
+
+@torch.inference_mode()
+def ensemble(model, test_corpus, train_corpus, window, vocab, device):
+    print('KNN l1...')
+    test_results1 = test_FFNN_KNN(model=model,
+                                  test_corpus=test_corpus,
+                                  train_corpus=train_corpus,
+                                  window=window,
+                                  vocab=vocab,
+                                  metric='l1',
+                                  device=device)
+    print('KNN l2...')
+    test_results2 = test_FFNN_KNN(model=model,
+                                  test_corpus=test_corpus,
+                                  train_corpus=train_corpus,
+                                  window=window,
+                                  vocab=vocab,
+                                  metric='l2',
+                                  device=device)
+    print('KNN js...')
+    test_results3 = test_FFNN_KNN(model=model,
+                                  test_corpus=test_corpus,
+                                  train_corpus=train_corpus,
+                                  window=window,
+                                  vocab=vocab,
+                                  metric='js',
+                                  device=device)
+    test_labels = [bio[-1] for bio in test_corpus if bio[-1].tok in ['[REAL]', '[FAKE]']]
+    test_preds = [test_results1['test_predictions'],
+                  test_results2['test_predictions'],
+                  test_results3['test_predictions']]
+    # majority voting
+    test_preds = [round(sum(preds) / len(preds)) for preds in zip(*test_preds)]
+    results = {}
+    if test_labels:
+        conf_matrix = get_confusion_matrix(test_preds, test_labels, vocab['[REAL]'].idx)
+        accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+        results = {
+            'accuracy': accuracy,
+            'confusion_matrix': conf_matrix,
+        }
+    results['test_perplexity'] = test_results1['test_perplexity']
+    results['test_predictions'] = test_preds
     return results
 
 
@@ -724,7 +766,7 @@ def parse_arguments():
     parser.add_argument('--load_path', type=str, default='')
     parser.add_argument('--weight_decay', type=float, default=0.000025)
     parser.add_argument('--classifier', type=str, default='KNN_js',
-                        choices=['KNN_l1', 'KNN_l2', 'KNN_js', 'chain'])
+                        choices=['KNN_l1', 'KNN_l2', 'KNN_js', 'ensemble', 'chain'])
 
     return parser.parse_args()
 
@@ -883,6 +925,13 @@ def main():
                                            vocab=vocab,
                                            path=path,
                                            device=device)
+        elif classifier == 'ensemble':
+            test_results = ensemble(model=model,
+                                    test_corpus=test_corpus,
+                                    train_corpus=train_corpus,
+                                    window=window,
+                                    vocab=vocab,
+                                    device=device)
         else:
             raise NotImplementedError
 
