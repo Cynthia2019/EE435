@@ -12,8 +12,6 @@ from torch import nn
 from typing import Callable
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader, default_collate
-from sklearn.neighbors import KNeighborsClassifier
-from scipy.spatial.distance import jensenshannon, pdist, cdist
 
 
 class Token:
@@ -168,13 +166,13 @@ class BioVariableLenDataset(Dataset):
     def collate(self, batch: list):
         batch = sorted(batch, key=len, reverse=True)
         lengths = [len(sample) - (1 - self.blind_mode) for sample in batch]
-        x = np.full((len(batch), len(batch[0])),
+        x = np.full((len(batch), lengths[0]),
                     fill_value=self.pad_val, dtype=np.int64)
-        y = np.full((len(batch), len(batch[0])),
+        y = np.full((len(batch), len(batch[0]) - 1),
                     fill_value=self.pad_val, dtype=np.int64)
-        for i, row in enumerate(batch):
-            x[i, :len(row) - (1 - self.blind_mode)] = row if self.blind_mode else row[:-1]
-            y[i, :len(row) - 1] = row[1:]
+        for i, (sample, length) in enumerate(zip(batch, lengths)):
+            x[i, :length] = sample[:length]
+            y[i, :len(sample) - 1] = sample[1:]
         y = torch.as_tensor(y)
         y = nn.utils.rnn.pack_padded_sequence(y, lengths, batch_first=True)
         return (torch.as_tensor(x), lengths), y.data
@@ -339,89 +337,6 @@ def get_confusion_matrix(preds, labels, positive_idx):
     return np.array([[TP, FP], [FN, TN]])
 
 
-def compute_seq_prob(model, seq, window, vocab, device):
-    num_windows = len(seq) - window
-    # initialize a tensor of length vocab_size
-    log_prob = torch.zeros(len(vocab), device=device)
-    for i in range(num_windows):
-        x = seq[i:i + window]
-        y = model(torch.tensor(x, device=device).unsqueeze(0))
-        log_prob += torch.log_softmax(y.squeeze(0), dim=0)
-    return log_prob
-
-
-@torch.inference_mode()
-def test_FFNN(model, test_corpus, train_corpus, window, vocab, device):
-    # fit a KNN to the training data
-    # initialize two np array
-    X, y = [], []
-    real_label_idx, fake_label_idx = vocab['[REAL]'].idx, vocab['[FAKE]'].idx
-
-    train_corpus = [np.array(bio, dtype=np.int64) for bio in train_corpus]
-    print("The length of train_corpus is {}".format(len(train_corpus)))
-
-    true_label_count, false_label_count = 0, 0
-    label_count = 100
-    iterations = 0
-    for seq in train_corpus:
-        iterations += 1
-        if iterations % 10 == 0:
-            print("Trained {} true labels and {} false labels".format(true_label_count, false_label_count))
-        append = False
-        if true_label_count > label_count and false_label_count > label_count: break
-        if seq[-1] == real_label_idx:
-            if true_label_count <= label_count:
-                append = True
-                true_label_count += 1
-        else:
-            if false_label_count <= label_count:
-                append = True
-                false_label_count += 1
-        if append:
-            seq_prob = compute_seq_prob(model, seq, window, vocab, device)
-            X.append(seq_prob.detach().cpu().numpy())
-            y.append(seq[-1])
-
-    X = np.array(X)
-    y = np.array(y)
-    knn = KNeighborsClassifier(n_neighbors=1, metric=jensenshannon)
-    knn.fit(X, y)
-    print('KNN fitted')
-
-    # compute the log probability of each sequence in the test set
-    model.eval()
-    test_data = [np.array(bio, dtype=np.int64) for bio in test_corpus]
-
-    TP, FP, FN, TN = 0, 0, 0, 0
-    iteration = 0
-    for seq in test_data:
-        iteration += 1
-        if iteration % 10 == 0:
-            print("{} of {} iterations".format(iteration, len(test_data)))
-        seq_prob = compute_seq_prob(model, seq, window, vocab, device)
-        # get the label of the sequence
-        label = seq[-1]
-        # TODO: solve run time warning in distance calculation: 
-        # invalid value encountered in sqrt return np.sqrt(js / 2.0)
-        predicted_label = knn.predict(seq_prob.detach().cpu().numpy().reshape(1, -1))
-        if predicted_label == vocab['[REAL]'].idx:
-            if label == vocab['[REAL]'].idx:
-                TP += 1
-            else:
-                FP += 1
-        else:
-            if label == vocab['[FAKE]'].idx:
-                TN += 1
-            else:
-                FN += 1
-    accuracy = (TP + TN) / (TP + FP + FN + TN)
-    results = {
-        'accuracy': accuracy,
-        'confusion_matrix': np.array([[TP, FP], [FN, TN]]),
-    }
-    return results
-
-
 def torch_js(p, q):  # js divergence
     def kl_div(a, b):  # kl divergence
         result = a * (a / b).log_()
@@ -574,13 +489,14 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     bins_center = (bins[1:] + bins[:-1]) / 2.
     intersection = bins_center[intersection]
     print('estimated decision boundary is', intersection)
-    plt.plot(bins_center, real_hist, c='b', label='Real')
-    plt.plot(bins_center, fake_hist, c='r', label='Fake')
-    plt.axvline(x=intersection, color='k', label='Decision Boundary')
-    plt.xlabel('-Avg. Log Prob')
-    plt.ylabel('Frequency')
-    plt.legend()
-    plt.savefig(os.path.join(path, 'histogram_plot_FFNN.png'))
+    if path is not None:
+        plt.plot(bins_center, real_hist, c='b', label='Real')
+        plt.plot(bins_center, fake_hist, c='r', label='Fake')
+        plt.axvline(x=intersection, color='k', label='Decision Boundary')
+        plt.xlabel('-Avg. Log Prob')
+        plt.ylabel('Frequency')
+        plt.legend()
+        plt.savefig(os.path.join(path, 'histogram_plot_FFNN.png'))
 
     real_idx = vocab['[REAL]'].idx
     fake_idx = vocab['[FAKE]'].idx
@@ -620,7 +536,7 @@ def test_LSTM(model, test_corpus, vocab, device):
     model.eval()
     criterion = nn.CrossEntropyLoss(reduction='sum').to(device)
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
-    if test_dataset:
+    if test_dataset.blind_mode:
         print('blind mode on')
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False,
                              collate_fn=test_dataset.collate)
@@ -631,13 +547,15 @@ def test_LSTM(model, test_corpus, vocab, device):
     total_loss, total_predicted = 0., 0
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader),
                                total=len(test_loader)):
-        if y[-1] in [real_idx, fake_idx]:
-            labels.append(y[-1])
+
         total_predicted += len(y)
         pred = model(x)
-        final_token_logits = pred[-1]
-        if len(pred) != len(y):
+        final_token_logits = pred[-1].cpu().numpy()
+        if test_dataset.blind_mode:
             pred = pred[:-1]
+        else:
+            labels.append(y[-1])
+        assert len(pred) == len(y)
         total_loss += criterion(pred, y.to(device))
         pred = final_token_logits[fake_idx] > final_token_logits[real_idx]
         pred = fake_idx if pred else real_idx
@@ -901,12 +819,22 @@ def main():
             f.write(str(params))
 
     print('---Testing Model---')
+    _, blind_corpus = encode(['./blind.test.tok'],
+                             count_threshold=-1,
+                             length_threshold=1,
+                             vocab=vocab)
+
     t = time.time()
     if model_type == "LSTM":
         test_results = test_LSTM(model=model,
                                  test_corpus=test_corpus,
                                  vocab=vocab,
                                  device=device)
+        blind_results = test_LSTM(model=model,
+                                  test_corpus=blind_corpus,
+                                  vocab=vocab,
+                                  device=device)
+
 
     else:
         if 'KNN' in classifier:
@@ -917,6 +845,13 @@ def main():
                                          vocab=vocab,
                                          metric=classifier[4:],
                                          device=device)
+            blind_results = test_FFNN_KNN(model=model,
+                                          test_corpus=blind_corpus,
+                                          train_corpus=train_corpus,
+                                          window=window,
+                                          vocab=vocab,
+                                          metric=classifier[4:],
+                                          device=device)
         elif classifier == 'chain':
             test_results = test_FFNN_chain(model=model,
                                            test_corpus=test_corpus,
@@ -925,6 +860,13 @@ def main():
                                            vocab=vocab,
                                            path=path,
                                            device=device)
+            blind_results = test_FFNN_chain(model=model,
+                                            test_corpus=blind_corpus,
+                                            train_corpus=train_corpus,
+                                            window=window,
+                                            vocab=vocab,
+                                            path=None,
+                                            device=device)
         elif classifier == 'ensemble':
             test_results = ensemble(model=model,
                                     test_corpus=test_corpus,
@@ -932,12 +874,20 @@ def main():
                                     window=window,
                                     vocab=vocab,
                                     device=device)
+            blind_results = ensemble(model=model,
+                                     test_corpus=blind_corpus,
+                                     train_corpus=train_corpus,
+                                     window=window,
+                                     vocab=vocab,
+                                     device=device)
         else:
             raise NotImplementedError
-
-    print(f'test accuracy {test_results["accuracy"]},'
-          f'test perplexity {test_results["test_perplexity"]},'
+    assert len(blind_results['test_predictions']) == len(blind_corpus)
+    print(f'test accuracy {test_results["accuracy"]},',
+          f'test perplexity {test_results["test_perplexity"]},',
+          f'blind test perplexity {blind_results["test_perplexity"]},',
           f'time {time.time() - t}')
+
     plot_confusion_matrix(test_results['confusion_matrix'], model_type, path)
 
 
