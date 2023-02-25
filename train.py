@@ -149,6 +149,10 @@ class BioFixedLenDataset(Dataset):
 
 class BioVariableLenDataset(Dataset):
     def __init__(self, corpus, pad_val: int):
+        self.blind_mode = corpus[0][-1].tok not in ['[REAL]', '[FAKE]']
+        if self.blind_mode:
+            for bio in corpus:
+                assert bio[-1].tok not in ['[REAL]', '[FAKE]']
         self.corpus = [np.array(bio, dtype=np.int64) for bio in corpus]
         self.pad_val = pad_val
 
@@ -163,13 +167,13 @@ class BioVariableLenDataset(Dataset):
 
     def collate(self, batch: list):
         batch = sorted(batch, key=len, reverse=True)
-        lengths = [len(sample) - 1 for sample in batch]
+        lengths = [len(sample) - (1 - self.blind_mode) for sample in batch]
         x = np.full((len(batch), len(batch[0])),
                     fill_value=self.pad_val, dtype=np.int64)
         y = np.full((len(batch), len(batch[0])),
                     fill_value=self.pad_val, dtype=np.int64)
         for i, row in enumerate(batch):
-            x[i, :len(row) - 1] = row[:-1]
+            x[i, :len(row) - (1 - self.blind_mode)] = row if self.blind_mode else row[:-1]
             y[i, :len(row) - 1] = row[1:]
         y = torch.as_tensor(y)
         y = nn.utils.rnn.pack_padded_sequence(y, lengths, batch_first=True)
@@ -458,12 +462,13 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
         batch_loss = criterion(pred, target)
         pred_probs = torch.softmax(pred, dim=1)
         avg_pred = pred_probs.mean(dim=0)
-        avg_pred /= avg_pred.max()  # normalize
+        avg_pred /= avg_pred.sum()  # normalize
         return avg_pred.cpu().numpy(), batch_loss, len(target)
 
     train_dist, train_labels = [], []
     for bio in train_corpus:
         train_labels.append(bio[-1].idx)
+        bio = bio[:-1]
         bio = np.array(bio, dtype=np.int64)
         train_dist.append(get_sequence_dist(bio)[0])
 
@@ -475,7 +480,9 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
     total_loss, total_predicted = 0., 0
     test_dist, test_labels = [], []
     for bio in test_corpus:
-        test_labels.append(bio[-1].idx)
+        if bio[-1].tok in ['[REAL]', '[FAKE]']:
+            test_labels.append(bio[-1].idx)
+            bio = bio[:-1]
         bio = np.array(bio, dtype=np.int64)
         distribution, loss, count = get_sequence_dist(bio)
         test_dist.append(distribution)
@@ -498,18 +505,21 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
     test_preds = []
     for prob_distribution in tqdm.tqdm(test_dist):
         distance_vec = metric(prob_distribution.unsqueeze(0), train_dist)
-        topk = torch.topk(distance_vec, k=51, sorted=False, largest=False).indices
+        topk = torch.topk(distance_vec, k=64, sorted=False, largest=False).indices
         nearest = train_labels[topk]
         pred_label = torch.mode(nearest).values.cpu().numpy()
         test_preds.append(pred_label)
-    pos_idx = vocab['[REAL]'].idx
-    conf_matrix = get_confusion_matrix(test_preds, test_labels, pos_idx)
-    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
-    results = {
-        'accuracy': accuracy,
-        'confusion_matrix': conf_matrix,
-        'test_perplexity': perplexity
-    }
+    results = {}
+    if test_labels:
+        conf_matrix = get_confusion_matrix(test_preds, test_labels, vocab['[REAL]'].idx)
+        accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+        results = {
+            'accuracy': accuracy,
+            'confusion_matrix': conf_matrix,
+            'test_perplexity': perplexity
+        }
+    results['test_perplexity'] = perplexity
+    results['test_predictions'] = test_preds
     return results
 
 
@@ -538,6 +548,7 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     seq_probs = {'[REAL]': [], '[FAKE]': []}
     for bio in train_corpus:
         label = bio[-1].tok
+        bio = bio[:-1]
         bio = np.array(bio, dtype=np.int64)
         seq_probs[label].append(get_sequence_prob(bio)[0])
     for k in seq_probs.keys():
@@ -577,7 +588,9 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     total_loss, total_predicted = 0., 0
     test_preds, test_labels = [], []
     for bio in test_corpus:
-        test_labels.append(bio[-1].idx)
+        if bio[-1].tok in ['[REAL]', '[FAKE]']:
+            test_labels.append(bio[-1].idx)
+            bio = bio[:-1]
         bio = np.array(bio, dtype=np.int64)
         seq_prob, loss, count = get_sequence_prob(bio)
         total_loss += loss
@@ -590,13 +603,17 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     total_loss /= total_predicted
     perplexity = torch.exp(total_loss).cpu().numpy()
 
-    conf_matrix = get_confusion_matrix(test_preds, test_labels, real_idx)
-    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
-    results = {
-        'accuracy': accuracy,
-        'confusion_matrix': conf_matrix,
-        'test_perplexity': perplexity
-    }
+    results = {}
+    if test_labels:
+        conf_matrix = get_confusion_matrix(test_preds, test_labels, real_idx)
+        accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+        results = {
+            'accuracy': accuracy,
+            'confusion_matrix': conf_matrix,
+            'test_perplexity': perplexity
+        }
+    results['test_perplexity'] = perplexity
+    results['test_predictions'] = test_preds
     return results
 
 
@@ -605,6 +622,8 @@ def test_LSTM(model, test_corpus, vocab, device):
     model.eval()
     criterion = nn.CrossEntropyLoss(reduction='sum').to(device)
     test_dataset = BioVariableLenDataset(test_corpus, len(vocab))
+    if test_dataset:
+        print('blind mode on')
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False,
                              collate_fn=test_dataset.collate)
     preds, labels = [], []
@@ -614,24 +633,30 @@ def test_LSTM(model, test_corpus, vocab, device):
     total_loss, total_predicted = 0., 0
     for i, (x, y) in tqdm.tqdm(enumerate(test_loader),
                                total=len(test_loader)):
+        if y[-1] in [real_idx, fake_idx]:
+            labels.append(y[-1])
         total_predicted += len(y)
         pred = model(x)
-        total_loss += criterion(pred, y.to(device))
         final_token_logits = pred[-1]
+        if len(pred) != len(y):
+            pred = pred[:-1]
+        total_loss += criterion(pred, y.to(device))
         pred = final_token_logits[fake_idx] > final_token_logits[real_idx]
         pred = fake_idx if pred else real_idx
         preds.append(pred)
-        labels.append(y[-1])
     total_loss /= total_predicted
     perplexity = torch.exp(total_loss).cpu().numpy()
-
-    conf_matrix = get_confusion_matrix(preds, labels, real_idx)
-    accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
-    results = {
-        'accuracy': accuracy,
-        'confusion_matrix': conf_matrix,
-        'test_perplexity': perplexity
-    }
+    results = {}
+    if labels:
+        conf_matrix = get_confusion_matrix(preds, labels, real_idx)
+        accuracy = (conf_matrix[0, 0] + conf_matrix[1, 1]) / conf_matrix.sum()
+        results = {
+            'accuracy': accuracy,
+            'confusion_matrix': conf_matrix,
+            'test_perplexity': perplexity
+        }
+    results['test_perplexity'] = perplexity
+    results['test_predictions'] = preds
     return results
 
 
