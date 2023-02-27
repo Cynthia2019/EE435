@@ -361,7 +361,8 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
         2) compute the average of all probability distributions from the same sequence
         3) normalize the averaged probability distribution
     2. for each probability distribution in test set, do:
-        use JS divergence as metric, classify using K nearest neighbors
+        use JS divergence/l1/l2 as metric against train set
+        classify using K nearest neighbors
     3. compute confusion matrix and accuracy
     """
     model.eval()
@@ -440,7 +441,10 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
 @torch.inference_mode()
 def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, device):
     """
-    classify FFNN using chain rule as described during lecture
+    classify FFNN using chain rule as described during lecture,
+    note that different from KNN method,
+    KNN uses average distribution to represent a sequence (a vector),
+    this uses average cross entropy  to represent a sequence (a scaler)
 
     However, instead of manually estimating the intersection from histogram plot,
     we compute the approximate intersection by looking for overlap of two histograms
@@ -830,9 +834,9 @@ def main():
                             model_type,
                             path)
 
-    if not load_path:
-        with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
-            f.write(str(params))
+    params.load_path = ''
+    with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
+        f.write(str(params))
 
     print('---Testing Model---')
     _, blind_corpus = encode(['./blind.test.tok'],
