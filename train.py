@@ -420,7 +420,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
     test_preds = []
     for prob_distribution in tqdm.tqdm(test_dist):
         distance_vec = metric(prob_distribution.unsqueeze(0), train_dist)
-        topk = torch.topk(distance_vec, k=64, sorted=False, largest=False).indices
+        topk = torch.topk(distance_vec, k=65, sorted=False, largest=False).indices
         nearest = train_labels[topk]
         pred_label = torch.mode(nearest).values.cpu().numpy()
         test_preds.append(pred_label)
@@ -471,10 +471,14 @@ def test_FFNN_chain(model, test_corpus, train_corpus, window, vocab, path, devic
     print('finding intersection')
     lowest = min(np.min(seq_probs['[REAL]']), np.min(seq_probs['[FAKE]']))
     highest = max(np.max(seq_probs['[REAL]']), np.max(seq_probs['[FAKE]']))
-    bin_range = (lowest - 1e-6, highest + 1e-6)
-    real_hist, bins = np.histogram(seq_probs['[REAL]'], 160, range=bin_range)
+    bin_range = (lowest - 1e-7, highest + 1e-7)
+    real_hist, bins = np.histogram(seq_probs['[REAL]'], 200, range=bin_range)
     fake_hist, _ = np.histogram(seq_probs['[FAKE]'], bins)
-    overlap_hist = np.minimum(real_hist, fake_hist)
+    real_hist_smoothed = np.array([real_hist[max(0, i - 2): i + 2].mean()
+                                   for i in range(len(real_hist))])
+    fake_hist_smoothed = np.array([fake_hist[max(0, i - 2): i + 2].mean()
+                                   for i in range(len(fake_hist))])
+    overlap_hist = np.minimum(real_hist_smoothed, fake_hist_smoothed)
     real_median = np.median(seq_probs['[REAL]'])
     intersect_range = [real_median,
                        np.median(seq_probs['[FAKE]'])]
@@ -625,6 +629,7 @@ def plot_learning_curve(train_perplexity: list, valid_perplexity: list,
     epochs = range(1, len(train_perplexity) + 1)
     plt.plot(epochs, train_perplexity, 'b', label='Train')
     plt.plot(epochs, valid_perplexity, 'r', label='Validation')
+    plt.xticks(np.arange(1, len(train_perplexity) + 1, len(train_perplexity) // 5))
     plt.xlabel('Epoch')
     plt.ylabel('Perplexity')
     plt.legend()
@@ -678,7 +683,7 @@ def save_pred(predictions, vocab, path):
 
     with open(os.path.join(path, 'blind_predictions.csv'),
               'w+', encoding='utf8') as f:
-        f.write(','.join(predictions))
+        f.write('\n'.join(predictions))
 
 
 def parse_arguments():
@@ -894,6 +899,7 @@ def main():
         else:
             raise NotImplementedError
     assert len(blind_results['test_predictions']) == len(blind_corpus)
+    print('blind test length:', len(blind_corpus))
     print(f'test accuracy {test_results["accuracy"]},',
           f'test perplexity {test_results["test_perplexity"]},',
           f'blind test perplexity {blind_results["test_perplexity"]},',
