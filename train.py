@@ -1,7 +1,6 @@
 import os
 import time
 import torch
-import tqdm
 import random
 import pickle
 import argparse
@@ -269,8 +268,7 @@ def train_categorical(model: nn.Module,
         t = time.time()
         model.train()
         total_predicted = 0
-        for i, (x, y) in tqdm.tqdm(enumerate(train_loader),
-                                   total=len(train_loader)):
+        for i, (x, y) in enumerate(train_loader):
             total_step += 1
             optim.zero_grad(set_to_none=True)
             pred = model(x)
@@ -419,7 +417,7 @@ def test_FFNN_KNN(model, test_corpus, train_corpus, window, vocab, metric, devic
     test_dist = np.array(test_dist, dtype=np.float32)
     test_dist = torch.as_tensor(test_dist, device=device)
     test_preds = []
-    for prob_distribution in tqdm.tqdm(test_dist):
+    for prob_distribution in test_dist:
         distance_vec = metric(prob_distribution.unsqueeze(0), train_dist)
         topk = torch.topk(distance_vec, k=65, sorted=False, largest=False).indices
         nearest = train_labels[topk]
@@ -553,8 +551,7 @@ def test_LSTM(model, test_corpus, vocab, device):
     fake_idx = vocab['[FAKE]'].idx
     print('testing started')
     total_loss, total_predicted = 0., 0
-    for i, (x, y) in tqdm.tqdm(enumerate(test_loader),
-                               total=len(test_loader)):
+    for i, (x, y) in enumerate(test_loader):
 
         total_predicted += len(y)
         pred = model(x)
