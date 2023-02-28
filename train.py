@@ -706,7 +706,7 @@ def parse_arguments():
 
 def main():
     # device detection
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
     seed_all(device)
     params = parse_arguments()
     print(params)
@@ -798,7 +798,8 @@ def main():
     # loading saved params
     if load_path:
         print(f'loaded from {load_path}')
-        model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth')))
+        model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth'),
+                                         map_location=device))
         with open(os.path.join(load_path, f'{model_type}_train_results.pkl'), 'rb') as f:
             results = pickle.load(f)
 
