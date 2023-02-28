@@ -315,8 +315,6 @@ def train_categorical(model: nn.Module,
         'train_perplexity': train_perplexity_per_epoch,
         'valid_perplexity': valid_perplexity_per_epoch,
     }
-    with open(os.path.join(path, 'train_results.pkl'), 'wb') as f:
-        pickle.dump(results, f)
     save_model(model, path)
 
     return results
@@ -792,11 +790,17 @@ def main():
     if device == 'cuda':
         torch.cuda.synchronize()
 
+    path = os.path.join(model_type, f'{int(time.time())}{"test" if load_path else ""}')
+    assert not os.path.exists(path)
+    os.makedirs(path)
+    print(f'saving to {path}')
+
     # loading saved params
     if load_path:
         print(f'loaded from {load_path}')
         model.load_state_dict(torch.load(os.path.join(load_path, f'{model_type}.pth')))
-        path = load_path
+        with open(os.path.join(load_path, f'{model_type}_train_results.pkl'), 'rb') as f:
+            results = pickle.load(f)
 
     # training a new model
     else:
@@ -810,9 +814,7 @@ def main():
                                   shuffle=False,
                                   collate_fn=valid_dataset.collate)
         print('validation dataset loaded with length', len(valid_dataset))
-        path = os.path.join(model_type, f'{int(time.time())}')
-        assert not os.path.exists(path)
-        os.makedirs(path)
+
         optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # start training for categorical prediction
@@ -825,13 +827,14 @@ def main():
                                     epochs=epochs,
                                     path=path,
                                     device=device)
+        with open(os.path.join(path, f'{model_type}_train_results.pkl'), 'wb') as f:
+            pickle.dump(results, f)
 
-        plot_learning_curve(results['train_perplexity'],
-                            results['valid_perplexity'],
-                            model_type,
-                            path)
+    plot_learning_curve(results['train_perplexity'],
+                        results['valid_perplexity'],
+                        model_type,
+                        path)
 
-    params.load_path = ''
     with open(os.path.join(path, 'arguments.txt'), 'w+') as f:
         f.write(str(params))
 
