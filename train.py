@@ -706,7 +706,7 @@ def parse_arguments():
 
 def main():
     # device detection
-    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     seed_all(device)
     params = parse_arguments()
     print(params)
